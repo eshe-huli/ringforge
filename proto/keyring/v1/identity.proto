@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package keyring.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/argus/ringforge/gen/keyring/v1;keyringv1";
+
+// NodeIdentity represents a unique node in the mesh network.
+// Each node is identified by its Ed25519 public key.
+message NodeIdentity {
+  // Ed25519 public key (32 bytes).
+  bytes node_id = 1;
+
+  // Human-readable name for the node.
+  string name = 2;
+
+  // Capabilities advertised by this node (e.g. "store", "relay", "sync").
+  repeated string capabilities = 3;
+}
+
+// NodePresence tracks the current state of a node in the mesh.
+message NodePresence {
+  // The identity of the node.
+  NodeIdentity identity = 1;
+
+  // Current status of the node.
+  NodeStatus status = 2;
+
+  // Last time the node was seen by any peer.
+  google.protobuf.Timestamp last_seen = 3;
+
+  // Reachable address (e.g. "192.168.1.10:9090", "/dns4/node.example.com/tcp/9090").
+  string address = 4;
+}
+
+// NodeStatus represents the possible states of a mesh node.
+enum NodeStatus {
+  NODE_STATUS_UNSPECIFIED = 0;
+  NODE_STATUS_ONLINE = 1;
+  NODE_STATUS_OFFLINE = 2;
+  NODE_STATUS_SYNCING = 3;
+}

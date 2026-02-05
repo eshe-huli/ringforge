@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package keyring.v1;
+
+import "keyring/v1/identity.proto";
+
+option go_package = "github.com/argus/ringforge/gen/keyring/v1;keyringv1";
+
+// MerkleRoot summarises the current state of a single document's hash tree.
+message MerkleRoot {
+  // The document this root belongs to.
+  string doc_id = 1;
+
+  // BLAKE3 root hash of the document's Merkle tree.
+  bytes root_hash = 2;
+}
+
+// SyncRequest is sent by a node to initiate reconciliation with a peer.
+message SyncRequest {
+  // Identity of the node initiating the sync.
+  NodeIdentity source_node = 1;
+
+  // Merkle roots the source currently holds.
+  repeated MerkleRoot roots = 2;
+}
+
+// SyncResponse tells the requester which blobs to push and which to fetch.
+message SyncResponse {
+  // Hashes the peer needs — the requester should send these blobs.
+  repeated bytes to_send = 1;
+
+  // Hashes the requester is missing — it should fetch these blobs.
+  repeated bytes to_request = 2;
+}
+
+// SyncService handles state reconciliation between mesh peers.
+service SyncService {
+  // Reconcile performs a single round-trip Merkle-based sync.
+  rpc Reconcile(SyncRequest) returns (SyncResponse);
+}

@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package keyring.v1;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/argus/ringforge/gen/keyring/v1;keyringv1";
+
+// Event is the envelope for all mesh-level events.
+message Event {
+  // Dot-separated event type (e.g. "node.joined", "sync.completed").
+  string type = 1;
+
+  // Node ID (hex-encoded Ed25519 public key) that originated this event.
+  string source_node = 2;
+
+  // When the event occurred.
+  google.protobuf.Timestamp timestamp = 3;
+
+  // Type-specific payload.
+  google.protobuf.Any payload = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Typed event payloads
+// ---------------------------------------------------------------------------
+
+// Emitted when a node joins the mesh.
+message NodeJoinedEvent {
+  string node_id = 1;
+  string name = 2;
+  string address = 3;
+}
+
+// Emitted when a node leaves or becomes unreachable.
+message NodeLeftEvent {
+  string node_id = 1;
+  string reason = 2;
+}
+
+// Emitted when a sync session begins between two peers.
+message SyncStartedEvent {
+  string source_node_id = 1;
+  string target_node_id = 2;
+  uint32 root_count = 3;
+}
+
+// Emitted when a sync session completes.
+message SyncCompletedEvent {
+  string source_node_id = 1;
+  string target_node_id = 2;
+  uint32 blobs_sent = 3;
+  uint32 blobs_received = 4;
+}
+
+// Emitted when a new blob is stored.
+message BlobStoredEvent {
+  // BLAKE3 hash of the blob.
+  bytes hash = 1;
+  uint64 size = 2;
+  string stored_by = 3;
+}
+
+// Emitted when a document is created or updated.
+message DocumentUpdatedEvent {
+  string document_id = 1;
+  bytes new_state_hash = 2;
+  string updated_by = 3;
+}
+
+// EventService allows subscribing to mesh events.
+service EventService {
+  // Subscribe opens a server-stream of mesh events.
+  rpc Subscribe(SubscribeRequest) returns (stream Event);
+}
+
+// SubscribeRequest filters which events to receive.
+message SubscribeRequest {
+  // If non-empty, only events matching these types are returned (prefix match).
+  repeated string type_filters = 1;
+}
