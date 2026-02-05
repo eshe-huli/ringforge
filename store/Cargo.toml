@@ -1,0 +1,19 @@
+[package]
+name = "ringforge-store"
+version = "0.1.0"
+edition = "2021"
+description = "Content-addressed storage port for Keyring, communicates via stdin/stdout length-prefixed frames"
+
+[dependencies]
+redb = "2"
+blake3 = "1"
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = true
