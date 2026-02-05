@@ -12,7 +12,7 @@
 | `proto/`  | Protobuf | Shared protocol definitions |
 | `infra/`  | Docker/Helm | Deployment, CI/CD |
 
-## The Six Laws
+## The Seven Laws
 
 1. **Offline-first** — every node works alone
 2. **Zero-config convergence** — nodes find each other and sync
@@ -20,6 +20,7 @@
 4. **Data sovereignty** — your data stays yours
 5. **Transport agnostic** — QUIC, WebSocket, TCP, Bluetooth, carrier pigeon
 6. **Scale invariant** — 2 nodes or 2000, same code
+7. **Events & observables everywhere** — every operation emits events; the mesh is intrinsically observable
 
 ## License
 
