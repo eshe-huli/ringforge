@@ -1,3 +1,5 @@
+[![CI](https://github.com/eshe-huli/ringforge/actions/workflows/ci.yml/badge.svg)](https://github.com/eshe-huli/ringforge/actions/workflows/ci.yml)
+
 # Ringforge
 
 **The Keyring monorepo** — a distributed agent mesh runtime.
