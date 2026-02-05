@@ -26,7 +26,10 @@ defmodule Hub.MixProject do
       {:bandit, "~> 1.0"},
       {:libcluster, "~> 3.3"},
       {:horde, "~> 0.9"},
-      {:delta_crdt, "~> 0.6"}
+      {:delta_crdt, "~> 0.6"},
+      {:telemetry, "~> 1.2"},
+      {:telemetry_metrics, "~> 0.6"},
+      {:telemetry_poller, "~> 1.0"}
     ]
   end
 end

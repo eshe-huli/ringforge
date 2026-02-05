@@ -7,6 +7,12 @@ defmodule Hub.Application do
     topology = Application.get_env(:hub, :cluster_topology, [])
 
     children = [
+      # Telemetry (must start before other children that emit events)
+      Hub.Telemetry,
+
+      # Rust storage engine port
+      {Hub.StorePort, []},
+
       # Cluster discovery
       {Cluster.Supervisor, [topology, [name: Hub.ClusterSupervisor]]},
 
