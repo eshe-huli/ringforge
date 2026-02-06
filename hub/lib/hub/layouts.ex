@@ -24,17 +24,6 @@ defmodule Hub.Layouts do
                 fontFamily: {
                   mono: ['JetBrains Mono', 'Fira Code', 'ui-monospace', 'monospace'],
                   sans: ['JetBrains Mono', 'system-ui', 'sans-serif']
-                },
-                colors: {
-                  'rf-bg': '#09090b',
-                  'rf-card': '#111119',
-                  'rf-border': '#1a1a2e',
-                  'rf-border-bright': '#252540',
-                  'rf-accent': '#f59e0b',
-                  'rf-accent-dim': '#92610b',
-                  'rf-text': '#e2e8f0',
-                  'rf-text-sec': '#94a3b8',
-                  'rf-text-muted': '#475569',
                 }
               }
             }
@@ -57,44 +46,6 @@ defmodule Hub.Layouts do
           body {
             background: var(--background);
             color: var(--foreground);
-          }
-
-          /* ── Background Grid ─────────────────────── */
-          .bg-grid {
-            background-image:
-              radial-gradient(circle at 1px 1px, rgba(255,255,255,0.03) 1px, transparent 0);
-            background-size: 32px 32px;
-          }
-
-          .bg-radial-glow {
-            background: radial-gradient(ellipse at 50% 0%, rgba(245,158,11,0.05) 0%, transparent 60%);
-          }
-
-          /* ── Glass Card ──────────────────────────── */
-          .glass-card {
-            background: rgba(17, 17, 25, 0.7);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid rgba(26, 26, 46, 0.8);
-          }
-          .glass-card:hover {
-            background: rgba(17, 17, 25, 0.85);
-            border-color: rgba(37, 37, 64, 0.9);
-          }
-
-          /* ── Transitions ─────────────────────────── */
-          .transition-smooth {
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-          }
-
-          /* ── Pulse dot ───────────────────────────── */
-          .pulse-dot {
-            animation: pulse-dot 2s ease-in-out infinite;
-          }
-
-          /* ── View transitions ────────────────────── */
-          .view-transition > * {
-            animation: fade-in 0.15s ease-out;
           }
 
           /* ── Scrollbar ───────────────────────────── */
