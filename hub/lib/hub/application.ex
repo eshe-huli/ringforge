@@ -26,6 +26,9 @@ defmodule Hub.Application do
       {Horde.DynamicSupervisor,
        [name: Hub.DynSupervisor, strategy: :one_for_one, members: :auto]},
 
+      # Ecto Repo (Postgres)
+      Hub.Repo,
+
       # CRDT-backed presence state
       {Hub.Presence, []},
 

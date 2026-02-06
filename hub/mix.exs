@@ -29,7 +29,9 @@ defmodule Hub.MixProject do
       {:delta_crdt, "~> 0.6"},
       {:telemetry, "~> 1.2"},
       {:telemetry_metrics, "~> 0.6"},
-      {:telemetry_poller, "~> 1.0"}
+      {:telemetry_poller, "~> 1.0"},
+      {:ecto_sql, "~> 3.11"},
+      {:postgrex, "~> 0.19.0"}
     ]
   end
 end

@@ -26,6 +26,18 @@ config :logger, :console,
 
 config :phoenix, :json_library, Jason
 
+# Ecto / Postgres
+config :hub, Hub.Repo,
+  username: "sentinel",
+  password: "sentinel_secret",
+  hostname: "localhost",
+  port: 5432,
+  database: "ringforge_dev",
+  pool_size: 10,
+  migration_primary_key: [name: :id, type: :binary_id]
+
+config :hub, ecto_repos: [Hub.Repo]
+
 # Rust storage engine
 config :hub,
   store_binary: System.get_env("RINGFORGE_STORE_BIN", Path.expand("../../store/target/release/ringforge-store", __DIR__)),
