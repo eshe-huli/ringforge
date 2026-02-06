@@ -10,10 +10,11 @@ defmodule Hub.Live.DashboardLive do
   - Quotas & Metrics (large visual bars, plan info)
   - Settings (fleet configuration)
 
-  Design system: zinc color scale matching Flow Designer.
-  All updates PubSub-driven. LiveView 0.20.x EEx syntax.
+  Uses SaladUI (shadcn for LiveView) components.
+  All updates PubSub-driven.
   """
   use Phoenix.LiveView
+  use SaladUI
 
   alias Hub.FleetPresence
   alias Hub.Live.Components
@@ -346,47 +347,48 @@ defmodule Hub.Live.DashboardLive do
   defp render_login(assigns) do
     ~H"""
     <div class="min-h-screen flex items-center justify-center bg-zinc-950">
-      <div class="w-full max-w-sm rounded-xl border border-zinc-800 bg-zinc-900 p-8 shadow-2xl animate-fade-in-up">
-        <div class="text-center mb-8">
-          <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-amber-500/15 border border-amber-500/25 mb-4">
+      <.card class="w-full max-w-sm bg-zinc-900 border-zinc-800 shadow-2xl animate-fade-in-up">
+        <.card_header class="text-center pb-2">
+          <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-amber-500/15 border border-amber-500/25 mb-4 mx-auto">
             <svg class="w-6 h-6 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
             </svg>
           </div>
-          <h1 class="text-xl font-semibold text-zinc-100">
+          <.card_title class="text-xl">
             <span>Ring</span><span class="text-amber-400">Forge</span>
-          </h1>
-          <p class="text-sm text-zinc-500 mt-1">Agent Coordination Mesh</p>
-        </div>
-
-        <form phx-submit="authenticate" class="space-y-4">
-          <div>
-            <label class="text-xs text-zinc-400 mb-1.5 block">Admin API Key</label>
-            <input
-              type="password"
-              name="key"
-              value={@key_input}
-              placeholder="rf_admin_..."
-              autocomplete="off"
-              class="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-700 rounded-lg text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-amber-500/50 transition-colors duration-200"
-            />
-          </div>
-
-          <%= if @auth_error do %>
-            <div class="flex items-center gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg py-2 px-3 animate-fade-in">
-              <span>✕</span>
-              <span><%= @auth_error %></span>
+          </.card_title>
+          <.card_description>Agent Coordination Mesh</.card_description>
+        </.card_header>
+        <.card_content>
+          <form phx-submit="authenticate" class="space-y-4">
+            <div>
+              <label class="text-xs text-zinc-400 mb-1.5 block">Admin API Key</label>
+              <.input
+                type="password"
+                name="key"
+                value={@key_input}
+                placeholder="rf_admin_..."
+                autocomplete="off"
+                class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+              />
             </div>
-          <% end %>
 
-          <button
-            type="submit"
-            class="w-full py-2.5 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-lg text-sm transition-colors duration-200"
-          >
-            Sign in
-          </button>
-        </form>
-      </div>
+            <%= if @auth_error do %>
+              <div class="flex items-center gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg py-2 px-3 animate-fade-in">
+                <span>✕</span>
+                <span><%= @auth_error %></span>
+              </div>
+            <% end %>
+
+            <.button
+              type="submit"
+              class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold"
+            >
+              Sign in
+            </.button>
+          </form>
+        </.card_content>
+      </.card>
     </div>
     """
   end
@@ -409,14 +411,14 @@ defmodule Hub.Live.DashboardLive do
       <%!-- Command Palette --%>
       <Components.command_palette open={@cmd_open} query={@cmd_query} agents={@agents} />
 
-      <%!-- Header — h-12, border-b, matching AppShell --%>
+      <%!-- Header --%>
       <header class="h-12 border-b border-zinc-800 flex items-center justify-between px-4 shrink-0 bg-zinc-950">
         <div class="flex items-center gap-3">
-          <button phx-click="toggle_sidebar" class="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors duration-150">
+          <.button variant="ghost" size="icon" phx-click="toggle_sidebar" class="h-8 w-8 text-zinc-400 hover:text-zinc-200">
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line>
             </svg>
-          </button>
+          </.button>
           <div class="flex items-center gap-2">
             <div class="w-7 h-7 rounded-lg bg-amber-500/15 border border-amber-500/25 flex items-center justify-center">
               <svg class="w-3.5 h-3.5 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -424,32 +426,32 @@ defmodule Hub.Live.DashboardLive do
               </svg>
             </div>
             <span class="text-sm font-semibold text-zinc-200">Ring<span class="text-amber-400">Forge</span></span>
-            <span class="text-zinc-600 text-xs">·</span>
+            <.separator orientation="vertical" class="h-4 mx-1" />
             <span class="text-xs text-zinc-500"><%= @fleet_name %></span>
           </div>
         </div>
 
         <div class="flex items-center gap-3">
           <%!-- Cmd+K button --%>
-          <button phx-click="toggle_command_palette" class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 text-zinc-500 hover:text-zinc-300 text-xs transition-colors duration-150">
+          <.button variant="outline" size="sm" phx-click="toggle_command_palette" class="hidden sm:flex items-center gap-2 border-zinc-800 hover:border-zinc-700 text-zinc-500 hover:text-zinc-300">
             <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
             <span>Search</span>
             <kbd class="px-1 py-0.5 text-[10px] rounded bg-zinc-800 border border-zinc-700 text-zinc-500">⌘K</kbd>
-          </button>
+          </.button>
           <%!-- Quick stats --%>
           <div class="hidden md:flex items-center gap-3 text-xs text-zinc-400">
             <div class="flex items-center gap-1.5">
               <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse-dot"></span>
               <span><%= @online_count %> online</span>
             </div>
-            <span class="text-zinc-700">·</span>
+            <.separator orientation="vertical" class="h-3" />
             <span><%= Components.fmt_num(@msg_used) %> msgs</span>
           </div>
           <%!-- Live indicator --%>
-          <div class="flex items-center gap-1.5 px-2 py-1 rounded-full border border-green-500/20 bg-green-500/5 text-green-400 text-[10px] font-medium">
-            <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse-dot"></span>
+          <.badge variant="outline" class="border-green-500/20 bg-green-500/5 text-green-400 text-[10px] font-medium">
+            <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse-dot mr-1.5"></span>
             Live
-          </div>
+          </.badge>
         </div>
       </header>
 
@@ -468,13 +470,15 @@ defmodule Hub.Live.DashboardLive do
             <Components.nav_item view="quotas" icon="◧" label="Quotas" active={@current_view == "quotas"} />
             <Components.nav_item view="settings" icon="⚙" label="Settings" active={@current_view == "settings"} />
 
-            <div class="pt-4 mt-4 border-t border-zinc-800">
-              <div class="p-3 rounded-lg bg-zinc-800/50 border border-zinc-700/50">
+            <.separator class="my-4" />
+
+            <.card class="bg-zinc-800/50 border-zinc-700/50">
+              <.card_content class="p-3">
                 <div class="text-[10px] text-zinc-500 mb-0.5">Plan</div>
                 <div class="text-xs font-medium text-amber-400 capitalize"><%= @plan %></div>
                 <div class="text-[10px] text-zinc-600 mt-1"><%= map_size(@agents) %> agents</div>
-              </div>
-            </div>
+              </.card_content>
+            </.card>
           </nav>
         </aside>
 
@@ -521,7 +525,7 @@ defmodule Hub.Live.DashboardLive do
         <p class="text-sm text-zinc-500">Fleet overview and real-time status</p>
       </div>
 
-      <%!-- Stat cards — 2x2 on mobile, 4 col on desktop --%>
+      <%!-- Stat cards --%>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 lg-grid-4">
         <Components.stat_card label="Total Agents" value={to_string(map_size(@agents))} icon="◎" color="amber" />
         <Components.stat_card label="Online Now" value={to_string(@ov_online)} icon="◉" color="green" delta={"+" <> to_string(@ov_online)} delta_type={:positive} />
@@ -534,7 +538,7 @@ defmodule Hub.Live.DashboardLive do
         <div>
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-medium text-zinc-300">Active Agents</h3>
-            <button phx-click="navigate" phx-value-view="agents" class="text-xs text-amber-400 hover:text-amber-300 transition-colors">View all →</button>
+            <.button variant="link" phx-click="navigate" phx-value-view="agents" class="text-xs text-amber-400 hover:text-amber-300 p-0 h-auto">View all →</.button>
           </div>
           <%= if map_size(@agents) == 0 do %>
             <Components.empty_state message="No agents connected" subtitle="Agents appear here when they join the fleet" icon="◎" />
@@ -556,12 +560,14 @@ defmodule Hub.Live.DashboardLive do
                 <h3 class="text-sm font-medium text-zinc-300">Recent Activity</h3>
                 <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse-dot"></span>
               </div>
-              <button phx-click="navigate" phx-value-view="activity" class="text-xs text-amber-400 hover:text-amber-300 transition-colors">View all →</button>
+              <.button variant="link" phx-click="navigate" phx-value-view="activity" class="text-xs text-amber-400 hover:text-amber-300 p-0 h-auto">View all →</.button>
             </div>
             <%= if @recent == [] do %>
-              <div class="p-4 rounded-lg bg-zinc-900 border border-zinc-800 text-center">
-                <p class="text-sm text-zinc-500">No activity yet</p>
-              </div>
+              <.card class="bg-zinc-900 border-zinc-800">
+                <.card_content class="p-4 text-center">
+                  <p class="text-sm text-zinc-500">No activity yet</p>
+                </.card_content>
+              </.card>
             <% else %>
               <div class="space-y-0.5">
                 <%= for a <- @recent do %>
@@ -575,14 +581,16 @@ defmodule Hub.Live.DashboardLive do
           <div>
             <div class="flex items-center justify-between mb-2">
               <h3 class="text-sm font-medium text-zinc-300">Quota Usage</h3>
-              <button phx-click="navigate" phx-value-view="quotas" class="text-xs text-amber-400 hover:text-amber-300 transition-colors">Details →</button>
+              <.button variant="link" phx-click="navigate" phx-value-view="quotas" class="text-xs text-amber-400 hover:text-amber-300 p-0 h-auto">Details →</.button>
             </div>
-            <div class="p-4 rounded-xl bg-zinc-900 border border-zinc-800 space-y-3">
-              <%= for {resource, label, icon, _color} <- Components.quota_resources() do %>
-                <% info = Map.get(@usage, resource, %{used: 0, limit: 0}) %>
-                <Components.quota_bar label={label} icon={icon} info={info} />
-              <% end %>
-            </div>
+            <.card class="bg-zinc-900 border-zinc-800">
+              <.card_content class="p-4 space-y-3">
+                <%= for {resource, label, icon, _color} <- Components.quota_resources() do %>
+                  <% info = Map.get(@usage, resource, %{used: 0, limit: 0}) %>
+                  <Components.quota_bar label={label} icon={icon} info={info} />
+                <% end %>
+              </.card_content>
+            </.card>
           </div>
         </div>
       </div>
@@ -613,11 +621,11 @@ defmodule Hub.Live.DashboardLive do
               <p class="text-sm text-zinc-500"><%= map_size(@agents) %> registered · <%= Enum.count(@agents, fn {_,m} -> m[:state] == "online" end) %> online</p>
             </div>
             <div class="relative">
-              <input
+              <.input
                 type="text" placeholder="Search agents..." value={@search_query} phx-keyup="update_search"
-                class="w-56 px-3 py-2 pl-8 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 transition-colors duration-200"
+                class="w-56 pl-8 bg-zinc-900 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600"
               />
-              <svg class="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-zinc-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <svg class="w-3.5 h-3.5 absolute left-2.5 top-3 text-zinc-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
             </div>
           </div>
         </div>
@@ -627,32 +635,32 @@ defmodule Hub.Live.DashboardLive do
           <%= if @agents_list == [] do %>
             <Components.empty_state message="No agents found" subtitle="Try a different search or wait for agents" icon="◎" />
           <% else %>
-            <table class="w-full">
-              <thead class="sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-sm">
-                <tr class="border-b border-zinc-800">
+            <.table>
+              <.table_header class="sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-sm">
+                <.table_row class="border-zinc-800 hover:bg-transparent">
                   <%= for {col, label} <- [{:name, "Name"}, {:state, "State"}] do %>
-                    <th class="py-2.5 px-4 text-left">
+                    <.table_head>
                       <button phx-click="sort_agents" phx-value-column={Atom.to_string(col)} class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider hover:text-zinc-300 transition-colors flex items-center gap-1">
                         <%= label %> <%= sort_arrow(@sort_by, @sort_dir, col) %>
                       </button>
-                    </th>
+                    </.table_head>
                   <% end %>
-                  <th class="py-2.5 px-4 text-left"><span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Capabilities</span></th>
-                  <th class="py-2.5 px-4 text-left"><span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Task</span></th>
-                  <th class="py-2.5 px-4 text-left"><span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Connected</span></th>
-                  <th class="py-2.5 px-4 text-left">
+                  <.table_head><span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Capabilities</span></.table_head>
+                  <.table_head><span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Task</span></.table_head>
+                  <.table_head><span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Connected</span></.table_head>
+                  <.table_head>
                     <button phx-click="sort_agents" phx-value-column="framework" class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider hover:text-zinc-300 transition-colors flex items-center gap-1">
                       Framework <%= sort_arrow(@sort_by, @sort_dir, :framework) %>
                     </button>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
+                  </.table_head>
+                </.table_row>
+              </.table_header>
+              <.table_body>
                 <%= for {id, meta} <- @agents_list do %>
                   <Components.agent_table_row agent_id={id} meta={meta} selected={@selected_agent == id} />
                 <% end %>
-              </tbody>
-            </table>
+              </.table_body>
+            </.table>
           <% end %>
         </div>
       </div>
@@ -664,38 +672,42 @@ defmodule Hub.Live.DashboardLive do
           <div class="p-4">
             <div class="flex items-center justify-between mb-4">
               <span class="text-sm font-medium text-zinc-300">Agent Detail</span>
-              <button phx-click="close_agent_detail" class="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors">
+              <.button variant="ghost" size="icon" phx-click="close_agent_detail" class="h-7 w-7 text-zinc-500 hover:text-zinc-300">
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-              </button>
+              </.button>
             </div>
 
-            <div class="p-4 rounded-xl bg-zinc-800/50 border border-zinc-700/50 mb-4">
-              <div class="flex items-center gap-3 mb-3">
-                <div class={"w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold " <> Components.avatar_bg(dm[:state])}>
-                  <%= Components.avatar_initial(dm[:name] || @selected_agent) %>
-                </div>
-                <div>
-                  <div class="text-sm font-semibold text-zinc-100"><%= dm[:name] || @selected_agent %></div>
-                  <div class="flex items-center gap-1.5">
-                    <span class={"w-2 h-2 rounded-full " <> Components.state_dot(dm[:state])}></span>
-                    <span class={"text-xs " <> Components.state_text(dm[:state])}><%= dm[:state] || "unknown" %></span>
+            <.card class="bg-zinc-800/50 border-zinc-700/50 mb-4">
+              <.card_content class="p-4">
+                <div class="flex items-center gap-3 mb-3">
+                  <div class={"w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold " <> Components.avatar_bg(dm[:state])}>
+                    <%= Components.avatar_initial(dm[:name] || @selected_agent) %>
+                  </div>
+                  <div>
+                    <div class="text-sm font-semibold text-zinc-100"><%= dm[:name] || @selected_agent %></div>
+                    <div class="flex items-center gap-1.5">
+                      <span class={"w-2 h-2 rounded-full " <> Components.state_dot(dm[:state])}></span>
+                      <.badge variant="outline" class={"text-[10px] " <> Components.state_badge(dm[:state])}><%= dm[:state] || "unknown" %></.badge>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div class="space-y-2 text-xs">
-                <%= for {label, val} <- [{"ID", @selected_agent}, {"Framework", dm[:framework] || "—"}, {"Connected", Components.format_connected_at(dm[:connected_at])}] do %>
-                  <div class="flex justify-between py-1 border-b border-zinc-700/30">
-                    <span class="text-zinc-500"><%= label %></span>
-                    <span class="text-zinc-300 font-mono text-[11px] truncate ml-3 max-w-[160px]"><%= val %></span>
+                <.separator class="my-3" />
+
+                <div class="space-y-2 text-xs">
+                  <%= for {label, val} <- [{"ID", @selected_agent}, {"Framework", dm[:framework] || "—"}, {"Connected", Components.format_connected_at(dm[:connected_at])}] do %>
+                    <div class="flex justify-between py-1 border-b border-zinc-700/30">
+                      <span class="text-zinc-500"><%= label %></span>
+                      <span class="text-zinc-300 font-mono text-[11px] truncate ml-3 max-w-[160px]"><%= val %></span>
+                    </div>
+                  <% end %>
+                  <div class="py-1">
+                    <span class="text-zinc-500 block mb-1">Task</span>
+                    <span class="text-zinc-300 text-[11px]"><%= dm[:task] || "No active task" %></span>
                   </div>
-                <% end %>
-                <div class="py-1">
-                  <span class="text-zinc-500 block mb-1">Task</span>
-                  <span class="text-zinc-300 text-[11px]"><%= dm[:task] || "No active task" %></span>
                 </div>
-              </div>
-            </div>
+              </.card_content>
+            </.card>
 
             <%!-- Capabilities --%>
             <div class="mb-4">
@@ -703,7 +715,7 @@ defmodule Hub.Live.DashboardLive do
               <%= if dm[:capabilities] && dm[:capabilities] != [] do %>
                 <div class="flex flex-wrap gap-1.5">
                   <%= for cap <- List.wrap(dm[:capabilities]) do %>
-                    <span class="text-[10px] px-2 py-0.5 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/15"><%= cap %></span>
+                    <.badge variant="outline" class="text-[10px] px-2 py-0.5 bg-amber-500/10 text-amber-400 border-amber-500/15"><%= cap %></.badge>
                   <% end %>
                 </div>
               <% else %>
@@ -711,10 +723,12 @@ defmodule Hub.Live.DashboardLive do
               <% end %>
             </div>
 
-            <button phx-click="send_dm_from_detail"
-              class="w-full py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-lg text-xs transition-colors duration-200 mb-4">
+            <.button phx-click="send_dm_from_detail"
+              class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs mb-4">
               Send Message
-            </button>
+            </.button>
+
+            <.separator class="mb-4" />
 
             <%!-- Recent activity --%>
             <div>
@@ -759,10 +773,15 @@ defmodule Hub.Live.DashboardLive do
           </div>
           <div class="flex rounded-lg border border-zinc-800 p-0.5 bg-zinc-900">
             <%= for {label, value} <- [{"All", "all"}, {"Tasks", "tasks"}, {"Discoveries", "discoveries"}, {"Alerts", "alerts"}, {"Joins", "joins"}] do %>
-              <button phx-click="set_filter" phx-value-filter={value}
-                class={"text-[10px] px-2.5 py-1.5 rounded-md font-medium transition-colors duration-150 " <> if(@filter == value, do: "bg-zinc-800 text-zinc-100", else: "text-zinc-500 hover:text-zinc-300")}>
+              <.button
+                variant={if(@filter == value, do: "secondary", else: "ghost")}
+                size="sm"
+                phx-click="set_filter"
+                phx-value-filter={value}
+                class={"text-[10px] px-2.5 py-1 h-auto rounded-md font-medium " <> if(@filter == value, do: "bg-zinc-800 text-zinc-100", else: "text-zinc-500 hover:text-zinc-300")}
+              >
                 <%= label %>
-              </button>
+              </.button>
             <% end %>
           </div>
         </div>
@@ -776,8 +795,8 @@ defmodule Hub.Live.DashboardLive do
             <div class="mb-5">
               <div class="flex items-center gap-3 mb-2">
                 <span class="text-xs font-medium text-zinc-400"><%= label %></span>
-                <div class="flex-1 h-px bg-zinc-800"></div>
-                <span class="text-[10px] text-zinc-600 font-mono"><%= length(items) %></span>
+                <.separator class="flex-1" />
+                <.badge variant="secondary" class="text-[10px] text-zinc-600 font-mono bg-transparent"><%= length(items) %></.badge>
               </div>
               <div class="space-y-0.5">
                 <%= for a <- items do %>
@@ -858,13 +877,13 @@ defmodule Hub.Live.DashboardLive do
           <div class="px-4 py-3 border-t border-zinc-800 shrink-0">
             <form phx-submit="send_message" class="flex gap-2">
               <input type="hidden" name="to" value={@msg_to} />
-              <input type="text" name="body" value={@msg_body} phx-keyup="update_msg_body"
+              <.input type="text" name="body" value={@msg_body} phx-keyup="update_msg_body"
                 placeholder={"Message " <> (am[:name] || @msg_to) <> "..."} autocomplete="off"
-                class="flex-1 px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 transition-colors duration-200" />
-              <button type="submit"
-                class="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-lg text-xs transition-colors duration-200 shrink-0">
+                class="flex-1 bg-zinc-900 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600" />
+              <.button type="submit"
+                class="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs shrink-0">
                 Send
-              </button>
+              </.button>
             </form>
           </div>
         <% else %>
@@ -900,21 +919,23 @@ defmodule Hub.Live.DashboardLive do
         </div>
 
         <%!-- Plan card --%>
-        <div class="p-4 rounded-xl bg-zinc-900 border border-zinc-800 mb-6 flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <div class="p-2 rounded-lg bg-amber-500/15">
-              <svg class="w-5 h-5 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+        <.card class="bg-zinc-900 border-zinc-800 mb-6">
+          <.card_content class="p-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="p-2 rounded-lg bg-amber-500/15">
+                <svg class="w-5 h-5 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+              </div>
+              <div>
+                <div class="text-sm font-semibold text-zinc-100 capitalize"><%= @plan %> Plan</div>
+                <div class="text-xs text-zinc-500">Tenant: <%= String.slice(@tenant_id, 0, 8) %>…</div>
+              </div>
             </div>
-            <div>
-              <div class="text-sm font-semibold text-zinc-100 capitalize"><%= @plan %> Plan</div>
-              <div class="text-xs text-zinc-500">Tenant: <%= String.slice(@tenant_id, 0, 8) %>…</div>
+            <div class="text-right">
+              <div class="text-[10px] text-zinc-500">Fleet</div>
+              <div class="text-sm font-medium text-zinc-300"><%= @fleet_name %></div>
             </div>
-          </div>
-          <div class="text-right">
-            <div class="text-[10px] text-zinc-500">Fleet</div>
-            <div class="text-sm font-medium text-zinc-300"><%= @fleet_name %></div>
-          </div>
-        </div>
+          </.card_content>
+        </.card>
 
         <%!-- Quota cards --%>
         <div class="grid grid-cols-2 gap-3 mb-6">
@@ -925,48 +946,56 @@ defmodule Hub.Live.DashboardLive do
         </div>
 
         <%!-- Plan comparison --%>
-        <div class="p-4 rounded-xl bg-zinc-900 border border-zinc-800 mb-6">
-          <h3 class="text-sm font-medium text-zinc-300 mb-3">Plan Limits</h3>
-          <table class="w-full text-xs">
-            <thead>
-              <tr class="border-b border-zinc-800">
-                <th class="py-2 px-3 text-left text-zinc-500 text-[10px] uppercase tracking-wider">Resource</th>
-                <%= for p <- ["free", "team", "enterprise"] do %>
-                  <th class={"py-2 px-3 text-center text-[10px] uppercase tracking-wider " <> if(@plan == p, do: "text-amber-400", else: "text-zinc-500")}>
-                    <%= p %><%= if @plan == p, do: " ●", else: "" %>
-                  </th>
-                <% end %>
-              </tr>
-            </thead>
-            <tbody>
-              <%= for {resource, label, _icon, _color} <- Components.quota_resources() do %>
-                <tr class="border-b border-zinc-800/50">
-                  <td class="py-2 px-3 text-zinc-400"><%= label %></td>
+        <.card class="bg-zinc-900 border-zinc-800 mb-6">
+          <.card_header class="pb-2">
+            <.card_title class="text-sm font-medium text-zinc-300">Plan Limits</.card_title>
+          </.card_header>
+          <.card_content>
+            <.table>
+              <.table_header>
+                <.table_row class="border-zinc-800 hover:bg-transparent">
+                  <.table_head class="text-zinc-500 text-[10px] uppercase tracking-wider">Resource</.table_head>
                   <%= for p <- ["free", "team", "enterprise"] do %>
-                    <% limits = Map.get(@plan_limits, p, %{}) %>
-                    <td class={"py-2 px-3 text-center font-mono " <> if(@plan == p, do: "text-amber-400", else: "text-zinc-400")}>
-                      <%= Components.fmt_limit(Map.get(limits, resource, 0)) %>
-                    </td>
+                    <.table_head class={"text-center text-[10px] uppercase tracking-wider " <> if(@plan == p, do: "text-amber-400", else: "text-zinc-500")}>
+                      <%= p %><%= if @plan == p, do: " ●", else: "" %>
+                    </.table_head>
                   <% end %>
-                </tr>
-              <% end %>
-            </tbody>
-          </table>
-        </div>
+                </.table_row>
+              </.table_header>
+              <.table_body>
+                <%= for {resource, label, _icon, _color} <- Components.quota_resources() do %>
+                  <.table_row class="border-zinc-800/50">
+                    <.table_cell class="text-zinc-400"><%= label %></.table_cell>
+                    <%= for p <- ["free", "team", "enterprise"] do %>
+                      <% limits = Map.get(@plan_limits, p, %{}) %>
+                      <.table_cell class={"text-center font-mono " <> if(@plan == p, do: "text-amber-400", else: "text-zinc-400")}>
+                        <%= Components.fmt_limit(Map.get(limits, resource, 0)) %>
+                      </.table_cell>
+                    <% end %>
+                  </.table_row>
+                <% end %>
+              </.table_body>
+            </.table>
+          </.card_content>
+        </.card>
 
         <%!-- Charts placeholder --%>
-        <div class="p-4 rounded-xl bg-zinc-900 border border-zinc-800">
-          <div class="flex items-center justify-between mb-3">
-            <h3 class="text-sm font-medium text-zinc-300">Usage Over Time</h3>
-            <span class="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-500">Coming soon</span>
-          </div>
-          <div class="h-28 flex items-center justify-center border border-zinc-800 border-dashed rounded-lg">
-            <div class="text-center">
-              <span class="text-xl opacity-20">📊</span>
-              <p class="text-[10px] text-zinc-600 mt-1">Historical charts</p>
+        <.card class="bg-zinc-900 border-zinc-800">
+          <.card_header class="pb-2">
+            <div class="flex items-center justify-between">
+              <.card_title class="text-sm font-medium text-zinc-300">Usage Over Time</.card_title>
+              <.badge variant="outline" class="text-[10px] bg-zinc-800 border-zinc-700 text-zinc-500">Coming soon</.badge>
             </div>
-          </div>
-        </div>
+          </.card_header>
+          <.card_content>
+            <div class="h-28 flex items-center justify-center border border-zinc-800 border-dashed rounded-lg">
+              <div class="text-center">
+                <span class="text-xl opacity-20">📊</span>
+                <p class="text-[10px] text-zinc-600 mt-1">Historical charts</p>
+              </div>
+            </div>
+          </.card_content>
+        </.card>
       </div>
     </div>
     """
@@ -986,60 +1015,72 @@ defmodule Hub.Live.DashboardLive do
         </div>
 
         <%!-- Fleet Info --%>
-        <div class="p-4 rounded-xl bg-zinc-900 border border-zinc-800 mb-4">
-          <h3 class="text-sm font-medium text-zinc-300 mb-3">Fleet Information</h3>
-          <div class="space-y-0 text-xs divide-y divide-zinc-800/50">
-            <%= for {label, val} <- [{"Fleet Name", @fleet_name}, {"Fleet ID", @fleet_id}, {"Tenant ID", @tenant_id}] do %>
+        <.card class="bg-zinc-900 border-zinc-800 mb-4">
+          <.card_header class="pb-2">
+            <.card_title class="text-sm font-medium text-zinc-300">Fleet Information</.card_title>
+          </.card_header>
+          <.card_content>
+            <div class="space-y-0 text-xs divide-y divide-zinc-800/50">
+              <%= for {label, val} <- [{"Fleet Name", @fleet_name}, {"Fleet ID", @fleet_id}, {"Tenant ID", @tenant_id}] do %>
+                <div class="flex justify-between py-2.5">
+                  <span class="text-zinc-500"><%= label %></span>
+                  <span class="text-zinc-300 font-mono text-[11px]"><%= val %></span>
+                </div>
+              <% end %>
               <div class="flex justify-between py-2.5">
-                <span class="text-zinc-500"><%= label %></span>
-                <span class="text-zinc-300 font-mono text-[11px]"><%= val %></span>
+                <span class="text-zinc-500">Plan</span>
+                <.badge variant="outline" class="text-amber-400 border-amber-500/20 font-medium capitalize"><%= @plan %></.badge>
               </div>
-            <% end %>
-            <div class="flex justify-between py-2.5">
-              <span class="text-zinc-500">Plan</span>
-              <span class="text-amber-400 font-medium capitalize"><%= @plan %></span>
+              <div class="flex justify-between py-2.5">
+                <span class="text-zinc-500">Agents</span>
+                <span class="text-zinc-300"><%= map_size(@agents) %> connected</span>
+              </div>
             </div>
-            <div class="flex justify-between py-2.5">
-              <span class="text-zinc-500">Agents</span>
-              <span class="text-zinc-300"><%= map_size(@agents) %> connected</span>
-            </div>
-          </div>
-        </div>
+          </.card_content>
+        </.card>
 
         <%!-- Connection --%>
-        <div class="p-4 rounded-xl bg-zinc-900 border border-zinc-800 mb-4">
-          <h3 class="text-sm font-medium text-zinc-300 mb-3">Connection</h3>
-          <div class="space-y-0 text-xs divide-y divide-zinc-800/50">
-            <div class="flex justify-between py-2.5">
-              <span class="text-zinc-500">WebSocket</span>
-              <div class="flex items-center gap-1.5">
-                <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse-dot"></span>
-                <span class="text-green-400">Connected</span>
+        <.card class="bg-zinc-900 border-zinc-800 mb-4">
+          <.card_header class="pb-2">
+            <.card_title class="text-sm font-medium text-zinc-300">Connection</.card_title>
+          </.card_header>
+          <.card_content>
+            <div class="space-y-0 text-xs divide-y divide-zinc-800/50">
+              <div class="flex justify-between py-2.5">
+                <span class="text-zinc-500">WebSocket</span>
+                <div class="flex items-center gap-1.5">
+                  <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse-dot"></span>
+                  <span class="text-green-400">Connected</span>
+                </div>
+              </div>
+              <div class="flex justify-between py-2.5">
+                <span class="text-zinc-500">PubSub</span>
+                <span class="text-zinc-300 font-mono text-[11px]">fleet:<%= @fleet_id %></span>
+              </div>
+              <div class="flex justify-between py-2.5">
+                <span class="text-zinc-500">Quota refresh</span>
+                <span class="text-zinc-300">5s interval</span>
               </div>
             </div>
-            <div class="flex justify-between py-2.5">
-              <span class="text-zinc-500">PubSub</span>
-              <span class="text-zinc-300 font-mono text-[11px]">fleet:<%= @fleet_id %></span>
-            </div>
-            <div class="flex justify-between py-2.5">
-              <span class="text-zinc-500">Quota refresh</span>
-              <span class="text-zinc-300">5s interval</span>
-            </div>
-          </div>
-        </div>
+          </.card_content>
+        </.card>
 
         <%!-- Keyboard shortcuts --%>
-        <div class="p-4 rounded-xl bg-zinc-900 border border-zinc-800">
-          <h3 class="text-sm font-medium text-zinc-300 mb-3">Keyboard Shortcuts</h3>
-          <div class="grid grid-cols-2 gap-1.5 text-xs">
-            <%= for {key, desc} <- [{"⌘K", "Command palette"}, {"1", "Dashboard"}, {"2", "Agents"}, {"3", "Activity"}, {"4", "Messaging"}, {"5", "Quotas"}, {"6", "Settings"}] do %>
-              <div class="flex items-center gap-2 py-1.5">
-                <kbd class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-400 text-[10px] font-mono min-w-[24px] text-center"><%= key %></kbd>
-                <span class="text-zinc-500"><%= desc %></span>
-              </div>
-            <% end %>
-          </div>
-        </div>
+        <.card class="bg-zinc-900 border-zinc-800">
+          <.card_header class="pb-2">
+            <.card_title class="text-sm font-medium text-zinc-300">Keyboard Shortcuts</.card_title>
+          </.card_header>
+          <.card_content>
+            <div class="grid grid-cols-2 gap-1.5 text-xs">
+              <%= for {key, desc} <- [{"⌘K", "Command palette"}, {"1", "Dashboard"}, {"2", "Agents"}, {"3", "Activity"}, {"4", "Messaging"}, {"5", "Quotas"}, {"6", "Settings"}] do %>
+                <div class="flex items-center gap-2 py-1.5">
+                  <kbd class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-400 text-[10px] font-mono min-w-[24px] text-center"><%= key %></kbd>
+                  <span class="text-zinc-500"><%= desc %></span>
+                </div>
+              <% end %>
+            </div>
+          </.card_content>
+        </.card>
       </div>
     </div>
     """

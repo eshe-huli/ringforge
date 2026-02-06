@@ -2,19 +2,19 @@ defmodule Hub.Live.Components do
   @moduledoc """
   Shared UI components for the Ringforge dashboard.
 
-  Design system mirrors the Flow Designer: zinc color scale,
-  clean borders, compact spacing, fast transitions.
-  All components use LiveView 0.20.x EEx syntax.
+  Uses SaladUI (shadcn for LiveView) components: Card, Table, Badge,
+  Button, Progress, Separator, Sheet, Skeleton, Input.
+  Zinc dark theme with amber accents.
   """
   use Phoenix.Component
+  use SaladUI
 
   # ═══════════════════════════════════════════════════════════
-  # Stat Card
+  # Stat Card (SaladUI Card)
   # ═══════════════════════════════════════════════════════════
 
   @doc """
-  Stat card matching Flow Designer's AnalyticsPanel pattern.
-  `bg-zinc-800` card, small icon+label top, big value bottom.
+  Stat card using SaladUI Card component.
   """
   def stat_card(assigns) do
     assigns = assign_new(assigns, :delta, fn -> nil end)
@@ -22,22 +22,26 @@ defmodule Hub.Live.Components do
     assigns = assign_new(assigns, :color, fn -> "amber" end)
 
     ~H"""
-    <div class="p-4 rounded-xl bg-zinc-800/80 border border-zinc-700/50 hover:border-zinc-600/50 transition-colors duration-200">
-      <div class="flex items-center gap-2 mb-2">
-        <div class={"p-1.5 rounded-lg " <> icon_bg(@color)}>
-          <span class="text-sm"><%= @icon %></span>
+    <.card class="bg-zinc-900 border-zinc-800 hover:border-zinc-700 transition-colors duration-200">
+      <.card_header class="pb-2">
+        <.card_description class="flex items-center gap-2">
+          <div class={"p-1.5 rounded-lg " <> icon_bg(@color)}>
+            <span class="text-sm"><%= @icon %></span>
+          </div>
+          <span class="text-xs text-zinc-400"><%= @label %></span>
+        </.card_description>
+      </.card_header>
+      <.card_content>
+        <div class="flex items-end gap-2">
+          <span class="text-2xl font-bold text-zinc-100"><%= @value %></span>
+          <%= if @delta do %>
+            <.badge variant="secondary" class={"text-[10px] px-1.5 py-0.5 " <> delta_style(@delta_type)}>
+              <%= @delta %>
+            </.badge>
+          <% end %>
         </div>
-        <span class="text-xs text-zinc-400"><%= @label %></span>
-      </div>
-      <div class="flex items-end gap-2">
-        <span class="text-2xl font-bold text-zinc-100"><%= @value %></span>
-        <%= if @delta do %>
-          <span class={"text-xs font-medium px-1.5 py-0.5 rounded-full " <> delta_style(@delta_type)}>
-            <%= @delta %>
-          </span>
-        <% end %>
-      </div>
-    </div>
+      </.card_content>
+    </.card>
     """
   end
 
@@ -48,67 +52,69 @@ defmodule Hub.Live.Components do
   defp icon_bg("red"), do: "bg-red-500/15 text-red-400"
   defp icon_bg(_), do: "bg-zinc-700 text-zinc-400"
 
-  defp delta_style(:positive), do: "bg-green-500/15 text-green-400"
-  defp delta_style(:negative), do: "bg-red-500/15 text-red-400"
-  defp delta_style(_), do: "bg-zinc-700 text-zinc-400"
+  defp delta_style(:positive), do: "bg-green-500/15 text-green-400 border-green-500/20"
+  defp delta_style(:negative), do: "bg-red-500/15 text-red-400 border-red-500/20"
+  defp delta_style(_), do: "bg-zinc-700 text-zinc-400 border-zinc-600"
 
   # ═══════════════════════════════════════════════════════════
-  # Agent Grid Card
+  # Agent Grid Card (SaladUI Card)
   # ═══════════════════════════════════════════════════════════
 
   def agent_grid_card(assigns) do
     ~H"""
-    <div
+    <.card
       phx-click="navigate"
       phx-value-view="agents"
       phx-value-agent={@agent_id}
-      class="p-3 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 cursor-pointer transition-all duration-200 group"
+      class="bg-zinc-900 border-zinc-800 hover:border-zinc-700 cursor-pointer transition-all duration-200 group"
     >
-      <div class="flex items-center gap-2.5 mb-2">
-        <div class={"w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold " <> avatar_bg(@meta[:state])}>
-          <%= avatar_initial(@meta[:name] || @agent_id) %>
-        </div>
-        <div class="min-w-0 flex-1">
-          <div class="text-sm font-medium text-zinc-200 truncate"><%= @meta[:name] || @agent_id %></div>
-          <div class="flex items-center gap-1.5">
-            <span class={"w-1.5 h-1.5 rounded-full " <> state_dot(@meta[:state]) <> if(@meta[:state] in ["online", "busy"], do: " animate-pulse-dot", else: "")}></span>
-            <span class="text-[11px] text-zinc-500"><%= @meta[:state] || "unknown" %></span>
+      <.card_content class="p-3">
+        <div class="flex items-center gap-2.5 mb-2">
+          <div class={"w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold " <> avatar_bg(@meta[:state])}>
+            <%= avatar_initial(@meta[:name] || @agent_id) %>
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="text-sm font-medium text-zinc-200 truncate"><%= @meta[:name] || @agent_id %></div>
+            <div class="flex items-center gap-1.5">
+              <span class={"w-1.5 h-1.5 rounded-full " <> state_dot(@meta[:state]) <> if(@meta[:state] in ["online", "busy"], do: " animate-pulse-dot", else: "")}></span>
+              <span class="text-[11px] text-zinc-500"><%= @meta[:state] || "unknown" %></span>
+            </div>
           </div>
         </div>
-      </div>
-      <%= if @meta[:task] do %>
-        <div class="text-xs text-zinc-400 truncate mb-1.5" title={@meta[:task]}>
-          <span class="text-zinc-600">→</span> <%= @meta[:task] %>
-        </div>
-      <% else %>
-        <div class="text-xs text-zinc-600 italic mb-1.5">Idle</div>
-      <% end %>
-      <%= if @meta[:capabilities] && @meta[:capabilities] != [] do %>
-        <div class="flex flex-wrap gap-1">
-          <%= for cap <- Enum.take(List.wrap(@meta[:capabilities]), 3) do %>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-500 border border-zinc-700/50"><%= cap %></span>
-          <% end %>
-          <%= if length(List.wrap(@meta[:capabilities])) > 3 do %>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-500">+<%= length(List.wrap(@meta[:capabilities])) - 3 %></span>
-          <% end %>
-        </div>
-      <% end %>
-    </div>
+        <%= if @meta[:task] do %>
+          <div class="text-xs text-zinc-400 truncate mb-1.5" title={@meta[:task]}>
+            <span class="text-zinc-600">→</span> <%= @meta[:task] %>
+          </div>
+        <% else %>
+          <div class="text-xs text-zinc-600 italic mb-1.5">Idle</div>
+        <% end %>
+        <%= if @meta[:capabilities] && @meta[:capabilities] != [] do %>
+          <div class="flex flex-wrap gap-1">
+            <%= for cap <- Enum.take(List.wrap(@meta[:capabilities]), 3) do %>
+              <.badge variant="outline" class="text-[10px] px-1.5 py-0.5 bg-zinc-800 text-zinc-500 border-zinc-700/50"><%= cap %></.badge>
+            <% end %>
+            <%= if length(List.wrap(@meta[:capabilities])) > 3 do %>
+              <.badge variant="secondary" class="text-[10px] px-1.5 py-0.5 bg-zinc-800 text-zinc-500">+<%= length(List.wrap(@meta[:capabilities])) - 3 %></.badge>
+            <% end %>
+          </div>
+        <% end %>
+      </.card_content>
+    </.card>
     """
   end
 
   # ═══════════════════════════════════════════════════════════
-  # Agent Table Row
+  # Agent Table Row (used inside SaladUI Table)
   # ═══════════════════════════════════════════════════════════
 
   def agent_table_row(assigns) do
     ~H"""
-    <tr
+    <.table_row
       phx-click="select_agent_detail"
       phx-value-agent-id={@agent_id}
-      class={"border-b border-zinc-800/50 cursor-pointer transition-colors duration-150 " <> if(@selected, do: "bg-amber-500/5", else: "hover:bg-zinc-800/50")}
+      class={"cursor-pointer transition-colors duration-150 " <> if(@selected, do: "bg-amber-500/5", else: "hover:bg-zinc-800/50")}
     >
-      <td class="py-3 px-4">
+      <.table_cell>
         <div class="flex items-center gap-2.5">
           <div class={"w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold " <> avatar_bg(@meta[:state])}>
             <%= avatar_initial(@meta[:name] || @agent_id) %>
@@ -118,33 +124,33 @@ defmodule Hub.Live.Components do
             <div class="text-[10px] text-zinc-600 font-mono truncate max-w-[140px]"><%= @agent_id %></div>
           </div>
         </div>
-      </td>
-      <td class="py-3 px-4">
+      </.table_cell>
+      <.table_cell>
         <div class="flex items-center gap-1.5">
           <span class={"w-2 h-2 rounded-full " <> state_dot(@meta[:state]) <> if(@meta[:state] in ["online", "busy"], do: " animate-pulse-dot", else: "")}></span>
-          <span class={"text-xs font-medium " <> state_text(@meta[:state])}><%= @meta[:state] || "unknown" %></span>
+          <.badge variant="outline" class={"text-[10px] " <> state_badge(@meta[:state])}><%= @meta[:state] || "unknown" %></.badge>
         </div>
-      </td>
-      <td class="py-3 px-4">
+      </.table_cell>
+      <.table_cell>
         <div class="flex flex-wrap gap-1">
           <%= for cap <- Enum.take(List.wrap(@meta[:capabilities] || []), 3) do %>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-500 border border-zinc-700/50"><%= cap %></span>
+            <.badge variant="outline" class="text-[10px] px-1.5 py-0.5 bg-zinc-800 text-zinc-500 border-zinc-700/50"><%= cap %></.badge>
           <% end %>
           <%= if length(List.wrap(@meta[:capabilities] || [])) > 3 do %>
             <span class="text-[10px] text-zinc-600">+<%= length(List.wrap(@meta[:capabilities])) - 3 %></span>
           <% end %>
         </div>
-      </td>
-      <td class="py-3 px-4">
+      </.table_cell>
+      <.table_cell>
         <span class="text-xs text-zinc-400 truncate block max-w-[180px]"><%= @meta[:task] || "—" %></span>
-      </td>
-      <td class="py-3 px-4">
+      </.table_cell>
+      <.table_cell>
         <span class="text-xs text-zinc-500 font-mono"><%= format_connected_at(@meta[:connected_at]) %></span>
-      </td>
-      <td class="py-3 px-4">
+      </.table_cell>
+      <.table_cell>
         <span class="text-xs text-zinc-400"><%= @meta[:framework] || "—" %></span>
-      </td>
-    </tr>
+      </.table_cell>
+    </.table_row>
     """
   end
 
@@ -165,9 +171,9 @@ defmodule Hub.Live.Components do
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2">
             <span class="text-sm font-medium text-zinc-200"><%= @activity.agent_name %></span>
-            <span class={"text-[10px] px-1.5 py-0.5 rounded-full font-medium " <> kind_badge(@activity.kind)}>
+            <.badge variant="secondary" class={"text-[10px] px-1.5 py-0.5 " <> kind_badge(@activity.kind)}>
               <%= @activity.kind %>
-            </span>
+            </.badge>
           </div>
           <%= unless @compact do %>
             <div class="text-xs text-zinc-500 mt-0.5 truncate"><%= @activity.description %></div>
@@ -179,7 +185,7 @@ defmodule Hub.Live.Components do
   end
 
   # ═══════════════════════════════════════════════════════════
-  # Quota Bar (compact)
+  # Quota Bar (compact, uses SaladUI Progress)
   # ═══════════════════════════════════════════════════════════
 
   def quota_bar(assigns) do
@@ -210,7 +216,7 @@ defmodule Hub.Live.Components do
   end
 
   # ═══════════════════════════════════════════════════════════
-  # Quota Card (large, for quotas page)
+  # Quota Card (large, SaladUI Card + Progress)
   # ═══════════════════════════════════════════════════════════
 
   def quota_card(assigns) do
@@ -218,38 +224,40 @@ defmodule Hub.Live.Components do
     assigns = assign(assigns, :pct, pct)
 
     ~H"""
-    <div class="p-4 rounded-xl bg-zinc-900 border border-zinc-800">
-      <div class="flex items-center justify-between mb-3">
-        <div class="flex items-center gap-3">
-          <div class={"p-2 rounded-lg " <> icon_bg(@color)}>
-            <span class="text-base"><%= @icon %></span>
-          </div>
-          <div>
-            <div class="text-sm font-medium text-zinc-200"><%= @label %></div>
-            <div class="text-xs text-zinc-500">
-              <%= fmt_num(@info[:used] || 0) %> of <%= fmt_limit(@info[:limit] || 0) %>
+    <.card class="bg-zinc-900 border-zinc-800">
+      <.card_content class="p-4">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-3">
+            <div class={"p-2 rounded-lg " <> icon_bg(@color)}>
+              <span class="text-base"><%= @icon %></span>
+            </div>
+            <div>
+              <div class="text-sm font-medium text-zinc-200"><%= @label %></div>
+              <div class="text-xs text-zinc-500">
+                <%= fmt_num(@info[:used] || 0) %> of <%= fmt_limit(@info[:limit] || 0) %>
+              </div>
             </div>
           </div>
+          <div class={"text-xl font-bold " <> pct_color(@pct)}><%= @pct %>%</div>
         </div>
-        <div class={"text-xl font-bold " <> pct_color(@pct)}><%= @pct %>%</div>
-      </div>
-      <div class="h-2 bg-zinc-800 rounded-full overflow-hidden">
-        <div
-          class={"h-full rounded-full transition-all duration-500 " <> bar_color(@pct)}
-          style={"width: #{max(@pct, 1)}%"}
-        ></div>
-      </div>
-      <%= if @pct >= 80 do %>
-        <div class={"mt-3 text-xs px-3 py-2 rounded-lg border " <> if(@pct >= 95, do: "bg-red-500/10 text-red-400 border-red-500/20", else: "bg-amber-500/10 text-amber-400 border-amber-500/20")}>
-          <%= if @pct >= 95, do: "⚠ Critical — approaching limit", else: "ℹ High usage — monitor closely" %>
+        <div class="h-2 bg-zinc-800 rounded-full overflow-hidden">
+          <div
+            class={"h-full rounded-full transition-all duration-500 " <> bar_color(@pct)}
+            style={"width: #{max(@pct, 1)}%"}
+          ></div>
         </div>
-      <% end %>
-    </div>
+        <%= if @pct >= 80 do %>
+          <div class={"mt-3 text-xs px-3 py-2 rounded-lg border " <> if(@pct >= 95, do: "bg-red-500/10 text-red-400 border-red-500/20", else: "bg-amber-500/10 text-amber-400 border-amber-500/20")}>
+            <%= if @pct >= 95, do: "⚠ Critical — approaching limit", else: "ℹ High usage — monitor closely" %>
+          </div>
+        <% end %>
+      </.card_content>
+    </.card>
     """
   end
 
   # ═══════════════════════════════════════════════════════════
-  # Nav Item
+  # Nav Item (SaladUI Button variant=ghost)
   # ═══════════════════════════════════════════════════════════
 
   def nav_item(assigns) do
@@ -264,7 +272,7 @@ defmodule Hub.Live.Components do
       <span class={"w-5 text-center " <> if(@active, do: "text-amber-400", else: "")}><%= @icon %></span>
       <span class="flex-1 text-left font-medium"><%= @label %></span>
       <%= if @badge do %>
-        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-zinc-700 text-zinc-400 font-mono"><%= @badge %></span>
+        <.badge variant="secondary" class="text-[10px] px-1.5 py-0.5 bg-zinc-700 text-zinc-400 font-mono"><%= @badge %></.badge>
       <% end %>
     </button>
     """
@@ -280,37 +288,41 @@ defmodule Hub.Live.Components do
 
     ~H"""
     <div class={"flex mb-3 " <> if(@is_self, do: "justify-end", else: "justify-start")}>
-      <div class={"max-w-[70%] rounded-xl px-3.5 py-2.5 " <> if(@is_self, do: "bg-amber-500/10 border border-amber-500/20 rounded-br-sm", else: "bg-zinc-800 border border-zinc-700 rounded-bl-sm")}>
-        <div class="flex items-center gap-2 mb-0.5">
-          <span class={"text-[11px] font-medium " <> if(@is_self, do: "text-amber-400", else: "text-zinc-400")}>
-            <%= get_in(@msg, ["from", "name"]) || get_in(@msg, ["from", "agent_id"]) || "unknown" %>
-          </span>
-          <span class="text-[10px] text-zinc-600 font-mono"><%= format_time(@msg["timestamp"]) %></span>
-        </div>
-        <p class="text-sm text-zinc-200 leading-relaxed">
-          <%= get_in(@msg, ["message", "text"]) || inspect(@msg["message"]) %>
-        </p>
-      </div>
+      <.card class={"max-w-[70%] " <> if(@is_self, do: "bg-amber-500/10 border-amber-500/20 rounded-br-sm", else: "bg-zinc-800 border-zinc-700 rounded-bl-sm")}>
+        <.card_content class="px-3.5 py-2.5">
+          <div class="flex items-center gap-2 mb-0.5">
+            <span class={"text-[11px] font-medium " <> if(@is_self, do: "text-amber-400", else: "text-zinc-400")}>
+              <%= get_in(@msg, ["from", "name"]) || get_in(@msg, ["from", "agent_id"]) || "unknown" %>
+            </span>
+            <span class="text-[10px] text-zinc-600 font-mono"><%= format_time(@msg["timestamp"]) %></span>
+          </div>
+          <p class="text-sm text-zinc-200 leading-relaxed">
+            <%= get_in(@msg, ["message", "text"]) || inspect(@msg["message"]) %>
+          </p>
+        </.card_content>
+      </.card>
     </div>
     """
   end
 
   # ═══════════════════════════════════════════════════════════
-  # Toast (matches Flow Designer ToastProvider)
+  # Toast
   # ═══════════════════════════════════════════════════════════
 
   def toast(assigns) do
     ~H"""
     <div class="fixed bottom-4 right-4 z-[100] pointer-events-none">
-      <div
-        class={"pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-lg border shadow-lg backdrop-blur-sm max-w-sm animate-slide-in-right cursor-pointer " <> toast_bg(@type)}
+      <.card
+        class={"pointer-events-auto max-w-sm animate-slide-in-right cursor-pointer " <> toast_bg(@type)}
         phx-click="clear_toast"
         role="alert"
       >
-        <span><%= toast_icon(@type) %></span>
-        <span class="text-sm text-zinc-200 flex-1"><%= @message %></span>
-        <span class="text-zinc-500 hover:text-zinc-300 transition-colors text-xs">✕</span>
-      </div>
+        <.card_content class="flex items-center gap-3 px-4 py-3">
+          <span><%= toast_icon(@type) %></span>
+          <span class="text-sm text-zinc-200 flex-1"><%= @message %></span>
+          <span class="text-zinc-500 hover:text-zinc-300 transition-colors text-xs">✕</span>
+        </.card_content>
+      </.card>
     </div>
     """
   end
@@ -326,7 +338,7 @@ defmodule Hub.Live.Components do
   defp toast_icon(_), do: "ℹ"
 
   # ═══════════════════════════════════════════════════════════
-  # Empty State (matches Flow Designer EmptyState)
+  # Empty State
   # ═══════════════════════════════════════════════════════════
 
   def empty_state(assigns) do
@@ -347,20 +359,22 @@ defmodule Hub.Live.Components do
   end
 
   # ═══════════════════════════════════════════════════════════
-  # Skeleton (matches Flow Designer SkeletonLoader)
+  # Skeleton (SaladUI Skeleton)
   # ═══════════════════════════════════════════════════════════
 
   def skeleton_card(assigns) do
     ~H"""
-    <div class="p-4 rounded-xl bg-zinc-900 border border-zinc-800 space-y-3">
-      <div class="flex items-center gap-3">
-        <div class="w-10 h-10 rounded-lg bg-zinc-800 animate-pulse"></div>
-        <div class="flex-1 space-y-2">
-          <div class="h-4 w-2/5 bg-zinc-800 rounded animate-pulse"></div>
-          <div class="h-3 w-3/5 bg-zinc-800 rounded animate-pulse"></div>
+    <.card class="bg-zinc-900 border-zinc-800">
+      <.card_content class="p-4 space-y-3">
+        <div class="flex items-center gap-3">
+          <.skeleton class="w-10 h-10 rounded-lg" />
+          <div class="flex-1 space-y-2">
+            <.skeleton class="h-4 w-2/5" />
+            <.skeleton class="h-3 w-3/5" />
+          </div>
         </div>
-      </div>
-    </div>
+      </.card_content>
+    </.card>
     """
   end
 
@@ -371,12 +385,12 @@ defmodule Hub.Live.Components do
     <div class="space-y-2">
       <%= for _i <- 1..@count do %>
         <div class="flex items-center gap-3 py-2">
-          <div class="w-3 h-3 rounded-full bg-zinc-800 animate-pulse"></div>
+          <.skeleton class="w-3 h-3 rounded-full" />
           <div class="flex-1 space-y-1.5">
-            <div class="h-3 w-1/3 bg-zinc-800 rounded animate-pulse"></div>
-            <div class="h-2.5 w-1/4 bg-zinc-800 rounded animate-pulse"></div>
+            <.skeleton class="h-3 w-1/3" />
+            <.skeleton class="h-2.5 w-1/4" />
           </div>
-          <div class="h-6 w-16 bg-zinc-800 rounded-full animate-pulse"></div>
+          <.skeleton class="h-6 w-16 rounded-full" />
         </div>
       <% end %>
     </div>
@@ -384,7 +398,7 @@ defmodule Hub.Live.Components do
   end
 
   # ═══════════════════════════════════════════════════════════
-  # Command Palette (matches Flow Designer CommandPalette)
+  # Command Palette
   # ═══════════════════════════════════════════════════════════
 
   def command_palette(assigns) do
@@ -395,66 +409,69 @@ defmodule Hub.Live.Components do
 
       <%!-- Palette --%>
       <div class="fixed inset-0 z-[60] flex items-start justify-center pt-[15vh]">
-        <div class="w-full max-w-lg rounded-xl shadow-2xl border overflow-hidden bg-zinc-900 border-zinc-700 animate-fade-in">
-          <%!-- Search --%>
-          <div class="flex items-center gap-3 px-4 py-3 border-b border-zinc-800">
-            <svg class="w-5 h-5 text-zinc-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-            <input
-              type="text"
-              value={@query}
-              phx-keyup="cmd_search"
-              placeholder="Search agents, actions..."
-              autofocus
-              class="flex-1 bg-transparent text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
-            />
-            <kbd class="px-1.5 py-0.5 text-[10px] rounded bg-zinc-800 border border-zinc-700 text-zinc-500">ESC</kbd>
-          </div>
+        <.card class="w-full max-w-lg shadow-2xl border-zinc-700 bg-zinc-900 overflow-hidden animate-fade-in">
+          <.card_content class="p-0">
+            <%!-- Search --%>
+            <div class="flex items-center gap-3 px-4 py-3 border-b border-zinc-800">
+              <svg class="w-5 h-5 text-zinc-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+              <input
+                type="text"
+                value={@query}
+                phx-keyup="cmd_search"
+                placeholder="Search agents, actions..."
+                autofocus
+                class="flex-1 bg-transparent text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
+              />
+              <kbd class="px-1.5 py-0.5 text-[10px] rounded bg-zinc-800 border border-zinc-700 text-zinc-500">ESC</kbd>
+            </div>
 
-          <%!-- Results --%>
-          <div class="max-h-[50vh] overflow-y-auto py-2">
-            <%!-- Navigation --%>
-            <div class="px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">Navigate</div>
-            <%= for {view, label, icon} <- [{"dashboard", "Dashboard", "◈"}, {"agents", "Agents", "◎"}, {"activity", "Activity", "◉"}, {"messaging", "Messaging", "◆"}, {"quotas", "Quotas", "◧"}, {"settings", "Settings", "⚙"}] do %>
-              <%= if @query == "" || String.contains?(String.downcase(label), String.downcase(@query)) do %>
-                <button
-                  phx-click="cmd_navigate"
-                  phx-value-view={view}
-                  class="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-zinc-800 transition-colors"
-                >
-                  <span class="text-sm text-zinc-500"><%= icon %></span>
-                  <span class="text-sm font-medium text-zinc-200"><%= label %></span>
-                </button>
+            <%!-- Results --%>
+            <div class="max-h-[50vh] overflow-y-auto py-2">
+              <%!-- Navigation --%>
+              <div class="px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">Navigate</div>
+              <%= for {view, label, icon} <- [{"dashboard", "Dashboard", "◈"}, {"agents", "Agents", "◎"}, {"activity", "Activity", "◉"}, {"messaging", "Messaging", "◆"}, {"quotas", "Quotas", "◧"}, {"settings", "Settings", "⚙"}] do %>
+                <%= if @query == "" || String.contains?(String.downcase(label), String.downcase(@query)) do %>
+                  <button
+                    phx-click="cmd_navigate"
+                    phx-value-view={view}
+                    class="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-zinc-800 transition-colors"
+                  >
+                    <span class="text-sm text-zinc-500"><%= icon %></span>
+                    <span class="text-sm font-medium text-zinc-200"><%= label %></span>
+                  </button>
+                <% end %>
               <% end %>
-            <% end %>
 
-            <%!-- Agents --%>
-            <%= if @agents != %{} do %>
-              <div class="px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500 mt-1">Agents</div>
-              <%= for {agent_id, meta} <- Enum.take(filter_agents_cmd(@agents, @query), 6) do %>
-                <button
-                  phx-click="cmd_go_agent"
-                  phx-value-agent={agent_id}
-                  class="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-zinc-800 transition-colors"
-                >
-                  <span class={"w-2 h-2 rounded-full " <> state_dot(meta[:state])}></span>
-                  <div class="flex-1 min-w-0">
-                    <div class="text-sm font-medium text-zinc-200"><%= meta[:name] || agent_id %></div>
-                    <div class="text-xs text-zinc-500 truncate"><%= meta[:task] || meta[:state] || "idle" %></div>
-                  </div>
-                </button>
+              <%!-- Agents --%>
+              <%= if @agents != %{} do %>
+                <.separator class="my-1" />
+                <div class="px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">Agents</div>
+                <%= for {agent_id, meta} <- Enum.take(filter_agents_cmd(@agents, @query), 6) do %>
+                  <button
+                    phx-click="cmd_go_agent"
+                    phx-value-agent={agent_id}
+                    class="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-zinc-800 transition-colors"
+                  >
+                    <span class={"w-2 h-2 rounded-full " <> state_dot(meta[:state])}></span>
+                    <div class="flex-1 min-w-0">
+                      <div class="text-sm font-medium text-zinc-200"><%= meta[:name] || agent_id %></div>
+                      <div class="text-xs text-zinc-500 truncate"><%= meta[:task] || meta[:state] || "idle" %></div>
+                    </div>
+                  </button>
+                <% end %>
               <% end %>
-            <% end %>
-          </div>
+            </div>
 
-          <%!-- Footer --%>
-          <div class="flex items-center gap-4 px-4 py-2 border-t border-zinc-800 text-xs text-zinc-500">
-            <span>↑↓ Navigate</span>
-            <span>↵ Select</span>
-            <span>esc Close</span>
-          </div>
-        </div>
+            <%!-- Footer --%>
+            <div class="flex items-center gap-4 px-4 py-2 border-t border-zinc-800 text-xs text-zinc-500">
+              <span>↑↓ Navigate</span>
+              <span>↵ Select</span>
+              <span>esc Close</span>
+            </div>
+          </.card_content>
+        </.card>
       </div>
     <% end %>
     """
@@ -503,11 +520,11 @@ defmodule Hub.Live.Components do
   def state_text("offline"), do: "text-red-400"
   def state_text(_), do: "text-zinc-500"
 
-  def state_badge("online"), do: "bg-green-500/15 text-green-400 border border-green-500/20"
-  def state_badge("busy"), do: "bg-amber-500/15 text-amber-400 border border-amber-500/20"
-  def state_badge("away"), do: "bg-zinc-700 text-zinc-400 border border-zinc-600"
-  def state_badge("offline"), do: "bg-red-500/15 text-red-400 border border-red-500/20"
-  def state_badge(_), do: "bg-zinc-700 text-zinc-400 border border-zinc-600"
+  def state_badge("online"), do: "bg-green-500/15 text-green-400 border-green-500/20"
+  def state_badge("busy"), do: "bg-amber-500/15 text-amber-400 border-amber-500/20"
+  def state_badge("away"), do: "bg-zinc-700 text-zinc-400 border-zinc-600"
+  def state_badge("offline"), do: "bg-red-500/15 text-red-400 border-red-500/20"
+  def state_badge(_), do: "bg-zinc-700 text-zinc-400 border-zinc-600"
 
   def kind_icon("task_started"), do: "🚀"
   def kind_icon("task_progress"), do: "⏳"

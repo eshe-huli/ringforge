@@ -41,6 +41,9 @@ defmodule Hub.Application do
       # Quota tracking (ETS-backed, must start before Endpoint)
       {Hub.Quota, []},
 
+      # TwMerge cache for SaladUI
+      TwMerge.Cache,
+
       # Phoenix endpoint (WebSocket transport)
       Hub.Endpoint
     ]

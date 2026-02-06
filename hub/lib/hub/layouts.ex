@@ -1,8 +1,7 @@
 defmodule Hub.Layouts do
   @moduledoc """
   Root and app layouts for LiveView pages.
-  Mirrors the Flow Designer design system: zinc color scale,
-  clean borders, fast transitions, JetBrains Mono.
+  Zinc dark theme with SaladUI CSS variables, JetBrains Mono font.
   """
   use Phoenix.Component
 
@@ -26,6 +25,18 @@ defmodule Hub.Layouts do
                   sans: ['JetBrains Mono', 'system-ui', 'sans-serif']
                 },
                 colors: {
+                  border: "hsl(var(--border))",
+                  input: "hsl(var(--input))",
+                  ring: "hsl(var(--ring))",
+                  background: "hsl(var(--background))",
+                  foreground: "hsl(var(--foreground))",
+                  primary: { DEFAULT: "hsl(var(--primary))", foreground: "hsl(var(--primary-foreground))" },
+                  secondary: { DEFAULT: "hsl(var(--secondary))", foreground: "hsl(var(--secondary-foreground))" },
+                  destructive: { DEFAULT: "hsl(var(--destructive))", foreground: "hsl(var(--destructive-foreground))" },
+                  muted: { DEFAULT: "hsl(var(--muted))", foreground: "hsl(var(--muted-foreground))" },
+                  accent: { DEFAULT: "hsl(var(--accent))", foreground: "hsl(var(--accent-foreground))" },
+                  popover: { DEFAULT: "hsl(var(--popover))", foreground: "hsl(var(--popover-foreground))" },
+                  card: { DEFAULT: "hsl(var(--card))", foreground: "hsl(var(--card-foreground))" },
                   'rf-bg': '#09090b',
                   'rf-card': '#111119',
                   'rf-border': '#1a1a2e',
@@ -35,7 +46,12 @@ defmodule Hub.Layouts do
                   'rf-text': '#e2e8f0',
                   'rf-text-sec': '#94a3b8',
                   'rf-text-muted': '#475569',
-                }
+                },
+                borderRadius: {
+                  lg: "var(--radius)",
+                  md: "calc(var(--radius) - 2px)",
+                  sm: "calc(var(--radius) - 4px)",
+                },
               }
             }
           }
@@ -44,19 +60,31 @@ defmodule Hub.Layouts do
           @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
 
           :root {
-            --background: #09090b;
-            --foreground: #fafafa;
-            --surface: #18181b;
-            --surface-hover: #27272a;
-            --border: #27272a;
-            --muted: #a1a1aa;
-            --accent: #f59e0b;
-            --accent-dim: #b45309;
+            --background: 240 10% 3.9%;
+            --foreground: 0 0% 98%;
+            --card: 240 10% 3.9%;
+            --card-foreground: 0 0% 98%;
+            --popover: 240 10% 3.9%;
+            --popover-foreground: 0 0% 98%;
+            --primary: 0 0% 98%;
+            --primary-foreground: 240 5.9% 10%;
+            --secondary: 240 3.7% 15.9%;
+            --secondary-foreground: 0 0% 98%;
+            --muted: 240 3.7% 15.9%;
+            --muted-foreground: 240 5% 64.9%;
+            --accent: 240 3.7% 15.9%;
+            --accent-foreground: 0 0% 98%;
+            --destructive: 0 62.8% 30.6%;
+            --destructive-foreground: 0 0% 98%;
+            --border: 240 3.7% 15.9%;
+            --input: 240 3.7% 15.9%;
+            --ring: 240 4.9% 83.9%;
+            --radius: 0.5rem;
           }
 
           body {
-            background: var(--background);
-            color: var(--foreground);
+            background: hsl(var(--background));
+            color: hsl(var(--foreground));
           }
 
           /* ── Background Grid ─────────────────────── */
@@ -99,14 +127,14 @@ defmodule Hub.Layouts do
 
           /* ── Scrollbar ───────────────────────────── */
           ::-webkit-scrollbar { width: 6px; height: 6px; }
-          ::-webkit-scrollbar-track { background: var(--surface); }
-          ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-          ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
-          * { scrollbar-width: thin; scrollbar-color: #27272a #18181b; }
+          ::-webkit-scrollbar-track { background: hsl(var(--secondary)); }
+          ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 3px; }
+          ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
+          * { scrollbar-width: thin; scrollbar-color: hsl(240 3.7% 15.9%) hsl(240 10% 3.9%); }
 
           /* ── Focus ring ──────────────────────────── */
           :focus-visible {
-            outline: 2px solid var(--accent);
+            outline: 2px solid #f59e0b;
             outline-offset: 2px;
           }
 
@@ -201,7 +229,7 @@ defmodule Hub.Layouts do
       <body class="h-full font-mono antialiased">
         <%= @inner_content %>
         <script src="https://cdn.jsdelivr.net/npm/phoenix@1.7.21/priv/static/phoenix.min.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/phoenix_live_view@0.20.17/priv/static/phoenix_live_view.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/phoenix_live_view@1.1.22/priv/static/phoenix_live_view.min.js"></script>
         <script>
           let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
           let liveSocket = new window.LiveView.LiveSocket("/live", window.Phoenix.Socket, {
