@@ -1,13 +1,15 @@
 defmodule Hub.Layouts do
   @moduledoc """
   Root and app layouts for LiveView pages.
+  Mirrors the Flow Designer design system: zinc color scale,
+  clean borders, fast transitions, JetBrains Mono.
   """
   use Phoenix.Component
 
   def root(assigns) do
     ~H"""
     <!DOCTYPE html>
-    <html lang="en" class="h-full">
+    <html lang="en" class="h-full dark">
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -16,14 +18,15 @@ defmodule Hub.Layouts do
         <script src="https://cdn.tailwindcss.com"></script>
         <script>
           tailwind.config = {
+            darkMode: 'class',
             theme: {
               extend: {
                 fontFamily: {
-                  mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+                  mono: ['JetBrains Mono', 'Fira Code', 'ui-monospace', 'monospace'],
                   sans: ['JetBrains Mono', 'system-ui', 'sans-serif']
                 },
                 colors: {
-                  'rf-bg': '#0a0a0f',
+                  'rf-bg': '#09090b',
                   'rf-card': '#111119',
                   'rf-border': '#1a1a2e',
                   'rf-border-bright': '#252540',
@@ -40,73 +43,20 @@ defmodule Hub.Layouts do
         <style>
           @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
 
-          /* ── Animations ──────────────────────────── */
-          @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-6px); }
-            to { opacity: 1; transform: translateY(0); }
-          }
-          .fade-in { animation: fadeIn 0.35s ease-out; }
-
-          @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(12px); }
-            to { opacity: 1; transform: translateY(0); }
-          }
-          .fade-in-up { animation: fadeInUp 0.5s ease-out; }
-
-          @keyframes pulse-dot {
-            0%, 100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
-            50% { box-shadow: 0 0 6px 2px currentColor; opacity: 0.7; }
-          }
-          .pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
-
-          @keyframes pulse-glow {
-            0%, 100% { opacity: 0.6; }
-            50% { opacity: 1; }
-          }
-          .pulse-glow { animation: pulse-glow 2.5s ease-in-out infinite; }
-
-          @keyframes shimmer {
-            0% { background-position: -200% center; }
-            100% { background-position: 200% center; }
-          }
-          .shimmer {
-            background: linear-gradient(90deg, transparent 30%, rgba(245,158,11,0.08) 50%, transparent 70%);
-            background-size: 200% 100%;
-            animation: shimmer 3s ease-in-out infinite;
+          :root {
+            --background: #09090b;
+            --foreground: #fafafa;
+            --surface: #18181b;
+            --surface-hover: #27272a;
+            --border: #27272a;
+            --muted: #a1a1aa;
+            --accent: #f59e0b;
+            --accent-dim: #b45309;
           }
 
-          @keyframes float-subtle {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-3px); }
-          }
-          .float-subtle { animation: float-subtle 4s ease-in-out infinite; }
-
-          @keyframes borderGlow {
-            0%, 100% { border-color: rgba(245,158,11,0.3); }
-            50% { border-color: rgba(245,158,11,0.6); }
-          }
-          .border-glow { animation: borderGlow 2s ease-in-out infinite; }
-
-          /* ── Slide-in panel ──────────────────────── */
-          @keyframes slideInRight {
-            from { opacity: 0; transform: translateX(20px); }
-            to { opacity: 1; transform: translateX(0); }
-          }
-          .slide-in-right { animation: slideInRight 0.25s ease-out; }
-
-          @keyframes slideInLeft {
-            from { opacity: 0; transform: translateX(-20px); }
-            to { opacity: 1; transform: translateX(0); }
-          }
-          .slide-in-left { animation: slideInLeft 0.25s ease-out; }
-
-          /* ── View transition ─────────────────────── */
-          .view-transition {
-            animation: viewFade 0.2s ease-out;
-          }
-          @keyframes viewFade {
-            from { opacity: 0.7; }
-            to { opacity: 1; }
+          body {
+            background: var(--background);
+            color: var(--foreground);
           }
 
           /* ── Background Grid ─────────────────────── */
@@ -132,25 +82,92 @@ defmodule Hub.Layouts do
             border-color: rgba(37, 37, 64, 0.9);
           }
 
+          /* ── Transitions ─────────────────────────── */
+          .transition-smooth {
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+          }
+
+          /* ── Pulse dot ───────────────────────────── */
+          .pulse-dot {
+            animation: pulse-dot 2s ease-in-out infinite;
+          }
+
+          /* ── View transitions ────────────────────── */
+          .view-transition > * {
+            animation: fade-in 0.15s ease-out;
+          }
+
           /* ── Scrollbar ───────────────────────────── */
-          ::-webkit-scrollbar { width: 5px; height: 5px; }
-          ::-webkit-scrollbar-track { background: transparent; }
-          ::-webkit-scrollbar-thumb { background: #252540; border-radius: 4px; }
-          ::-webkit-scrollbar-thumb:hover { background: #3a3a5c; }
-          * { scrollbar-width: thin; scrollbar-color: #252540 transparent; }
+          ::-webkit-scrollbar { width: 6px; height: 6px; }
+          ::-webkit-scrollbar-track { background: var(--surface); }
+          ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+          ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+          * { scrollbar-width: thin; scrollbar-color: #27272a #18181b; }
 
-          /* ── Bar glow ────────────────────────────── */
-          .bar-glow-green {
-            box-shadow: 0 0 8px rgba(34, 197, 94, 0.3);
-          }
-          .bar-glow-yellow {
-            box-shadow: 0 0 8px rgba(234, 179, 8, 0.3);
-          }
-          .bar-glow-red {
-            box-shadow: 0 0 8px rgba(239, 68, 68, 0.3);
+          /* ── Focus ring ──────────────────────────── */
+          :focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
           }
 
-          /* ── Activity accent bar ─────────────────── */
+          /* ── Selection ───────────────────────────── */
+          ::selection {
+            background: rgba(245, 158, 11, 0.25);
+            color: inherit;
+          }
+
+          /* ── Animations ──────────────────────────── */
+          @keyframes fade-in {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+          .animate-fade-in {
+            animation: fade-in 0.2s ease-out;
+          }
+
+          @keyframes fade-in-up {
+            from { opacity: 0; transform: translateY(12px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+          .animate-fade-in-up {
+            animation: fade-in-up 0.3s ease-out;
+          }
+
+          @keyframes slide-in-right {
+            from { opacity: 0; transform: translateX(100%); }
+            to { opacity: 1; transform: translateX(0); }
+          }
+          .animate-slide-in-right {
+            animation: slide-in-right 0.3s ease-out;
+          }
+
+          @keyframes slide-in-left {
+            from { opacity: 0; transform: translateX(-16px); }
+            to { opacity: 1; transform: translateX(0); }
+          }
+          .animate-slide-in-left {
+            animation: slide-in-left 0.2s ease-out;
+          }
+
+          @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+          }
+          .animate-pulse-dot {
+            animation: pulse-dot 2s ease-in-out infinite;
+          }
+
+          @keyframes shimmer {
+            0% { background-position: -200% center; }
+            100% { background-position: 200% center; }
+          }
+          .animate-shimmer {
+            background: linear-gradient(90deg, transparent 30%, rgba(255,255,255,0.03) 50%, transparent 70%);
+            background-size: 200% 100%;
+            animation: shimmer 2s ease-in-out infinite;
+          }
+
+          /* ── Accent bar for activity items ───────── */
           .accent-bar {
             position: relative;
           }
@@ -158,80 +175,30 @@ defmodule Hub.Layouts do
             content: '';
             position: absolute;
             left: 0;
-            top: 4px;
-            bottom: 4px;
-            width: 3px;
-            border-radius: 3px;
+            top: 6px;
+            bottom: 6px;
+            width: 2px;
+            border-radius: 2px;
             background: currentColor;
-            opacity: 0.6;
+            opacity: 0.5;
           }
 
-          /* ── Focus glow ──────────────────────────── */
-          .focus-glow:focus {
-            box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15), 0 0 12px rgba(245, 158, 11, 0.08);
-          }
+          /* ── Quota bar glow ──────────────────────── */
+          .bar-glow-green { box-shadow: 0 0 6px rgba(34, 197, 94, 0.2); }
+          .bar-glow-amber { box-shadow: 0 0 6px rgba(245, 158, 11, 0.2); }
+          .bar-glow-red   { box-shadow: 0 0 6px rgba(239, 68, 68, 0.2); }
 
-          /* ── Toast ───────────────────────────────── */
-          .toast-enter {
-            animation: toastIn 0.3s ease-out, toastOut 0.3s ease-in 3s forwards;
-          }
-          @keyframes toastIn {
-            from { opacity: 0; transform: translateY(-8px) scale(0.95); }
-            to { opacity: 1; transform: translateY(0) scale(1); }
-          }
-          @keyframes toastOut {
-            to { opacity: 0; transform: translateY(-4px) scale(0.98); }
-          }
-
-          /* ── Transitions ─────────────────────────── */
-          .transition-smooth {
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-          }
-
-          /* ── Skeleton loading ────────────────────── */
-          @keyframes skeletonPulse {
-            0%, 100% { opacity: 0.4; }
-            50% { opacity: 0.7; }
-          }
-          .animate-pulse {
-            animation: skeletonPulse 1.5s ease-in-out infinite;
-          }
-
-          /* ── Table styles ────────────────────────── */
-          table tbody tr {
-            transition: background-color 0.15s ease;
-          }
-
-          /* ── Responsive adjustments ──────────────── */
+          /* ── Responsive ──────────────────────────── */
           @media (max-width: 1024px) {
-            .grid-cols-4 {
-              grid-template-columns: repeat(2, 1fr);
-            }
-            .grid-cols-\[1fr_380px\] {
-              grid-template-columns: 1fr;
-            }
+            .lg-grid-4 { grid-template-columns: repeat(2, 1fr) !important; }
+            .lg-grid-sidebar { grid-template-columns: 1fr !important; }
           }
-
           @media (max-width: 768px) {
-            .grid-cols-4 {
-              grid-template-columns: 1fr;
-            }
-          }
-
-          /* ── Selection highlight ─────────────────── */
-          ::selection {
-            background: rgba(245, 158, 11, 0.25);
-            color: #fff;
-          }
-
-          /* ── Keyboard shortcut ───────────────────── */
-          kbd {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 10px;
+            .lg-grid-4 { grid-template-columns: 1fr !important; }
           }
         </style>
       </head>
-      <body class="h-full bg-rf-bg text-rf-text font-mono antialiased bg-grid">
+      <body class="h-full font-mono antialiased">
         <%= @inner_content %>
         <script src="https://cdn.jsdelivr.net/npm/phoenix@1.7.21/priv/static/phoenix.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/phoenix_live_view@0.20.17/priv/static/phoenix_live_view.min.js"></script>
@@ -245,15 +212,19 @@ defmodule Hub.Layouts do
 
           // Keyboard shortcuts
           document.addEventListener('keydown', function(e) {
-            // Skip if typing in an input/textarea
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-
-            const views = {'1': 'dashboard', '2': 'agents', '3': 'activity', '4': 'messaging', '5': 'quotas', '6': 'settings'};
-            if (views[e.key]) {
+            const views = {
+              '1': 'dashboard', '2': 'agents', '3': 'activity',
+              '4': 'messaging', '5': 'quotas', '6': 'settings'
+            };
+            if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+              e.preventDefault();
               liveSocket.main.channel.push('event', {
-                type: 'click',
-                event: 'navigate',
-                value: { view: views[e.key] }
+                type: 'click', event: 'toggle_command_palette', value: {}
+              });
+            } else if (views[e.key]) {
+              liveSocket.main.channel.push('event', {
+                type: 'click', event: 'navigate', value: { view: views[e.key] }
               });
             }
           });
