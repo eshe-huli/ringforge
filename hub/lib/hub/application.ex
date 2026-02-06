@@ -29,8 +29,11 @@ defmodule Hub.Application do
       # Ecto Repo (Postgres)
       Hub.Repo,
 
-      # CRDT-backed presence state
+      # CRDT-backed presence state (used by KeyringChannel)
       {Hub.Presence, []},
+
+      # Phoenix.Presence for fleet channels
+      Hub.FleetPresence,
 
       # Phoenix endpoint (WebSocket transport)
       Hub.Endpoint

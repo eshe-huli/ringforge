@@ -12,6 +12,7 @@ defmodule Hub.Socket do
   require Logger
 
   channel "keyring:*", Hub.KeyringChannel
+  channel "fleet:*", Hub.FleetChannel
 
   @impl true
   def connect(%{"api_key" => raw_key, "agent" => agent_info}, socket, _connect_info) do
