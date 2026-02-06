@@ -20,8 +20,10 @@ defmodule Hub.MixProject do
 
   defp deps do
     [
-      {:phoenix, "~> 1.7"},
+      {:phoenix, "~> 1.7.0"},
       {:phoenix_pubsub, "~> 2.1"},
+      {:phoenix_html, "~> 4.0"},
+      {:phoenix_live_view, "~> 0.20"},
       {:jason, "~> 1.4"},
       {:bandit, "~> 1.0"},
       {:libcluster, "~> 3.3"},

@@ -5,7 +5,9 @@ config :hub, Hub.Endpoint,
   http: [port: 4000],
   server: true,
   adapter: Bandit.PhoenixAdapter,
-  pubsub_server: Hub.PubSub
+  pubsub_server: Hub.PubSub,
+  secret_key_base: "Rk9SZ0VfSFVCX1NFQ1JFVF9LRVlfQkFTRV82NF9CWVRFU19NSU5JTVVNXw==+ringforge_dev_only",
+  live_view: [signing_salt: "ringforge_lv_salt"]
 
 config :hub,
   cluster_topology: [

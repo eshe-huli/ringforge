@@ -1,6 +1,8 @@
 defmodule Hub.Router do
   use Phoenix.Router
 
+  import Phoenix.LiveView.Router
+
   pipeline :api do
     plug :accepts, ["json"]
   end
@@ -12,6 +14,14 @@ defmodule Hub.Router do
 
   pipeline :metrics do
     plug :accepts, ["text", "html"]
+  end
+
+  pipeline :browser do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :put_root_layout, html: {Hub.Layouts, :root}
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
   end
 
   scope "/api", Hub do
@@ -34,5 +44,10 @@ defmodule Hub.Router do
   scope "/", Hub do
     pipe_through :metrics
     get "/metrics", MetricsController, :index
+  end
+
+  scope "/", Hub.Live do
+    pipe_through :browser
+    live "/dashboard", DashboardLive
   end
 end
