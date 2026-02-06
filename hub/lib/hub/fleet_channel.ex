@@ -95,6 +95,36 @@ defmodule Hub.FleetChannel do
     {:noreply, socket}
   end
 
+  # Memory change delivery (from PubSub subscription)
+  def handle_info({:memory_changed, event}, socket) do
+    patterns = Map.get(socket.assigns, :memory_patterns, [])
+
+    # If no patterns are subscribed, this process shouldn't receive this,
+    # but check anyway. When patterns exist, filter by match.
+    should_push =
+      patterns == [] or
+        Enum.any?(patterns, fn %{pattern: pat, events: events} ->
+          action_match = event.action in events
+          key_match = pattern_matches?(pat, event.key)
+          action_match and key_match
+        end)
+
+    if should_push do
+      push(socket, "memory:changed", %{
+        "type" => "memory",
+        "event" => "changed",
+        "payload" => %{
+          "key" => event.key,
+          "action" => event.action,
+          "author" => event.author,
+          "timestamp" => event.timestamp
+        }
+      })
+    end
+
+    {:noreply, socket}
+  end
+
   # ── presence:update — client updates their state ───────────
 
   @impl true
@@ -294,6 +324,141 @@ defmodule Hub.FleetChannel do
     handle_in("activity:history", %{"payload" => %{}}, socket)
   end
 
+  # ── memory:set — create/update a memory entry ───────────────
+
+  def handle_in("memory:set", %{"payload" => payload}, socket) do
+    key = Map.get(payload, "key")
+
+    if is_nil(key) or key == "" do
+      {:reply, {:error, %{reason: "key is required"}}, socket}
+    else
+      params = Map.put(payload, "author", socket.assigns.agent_id)
+
+      case Hub.Memory.set(socket.assigns.fleet_id, key, params) do
+        {:ok, entry} ->
+          {:reply, {:ok, %{id: entry["id"], key: entry["key"], version: 1}}, socket}
+      end
+    end
+  end
+
+  def handle_in("memory:set", payload, socket) when is_map(payload) do
+    handle_in("memory:set", %{"payload" => payload}, socket)
+  end
+
+  # ── memory:get — retrieve a memory entry ───────────────────
+
+  def handle_in("memory:get", %{"payload" => %{"key" => key}}, socket) do
+    case Hub.Memory.get(socket.assigns.fleet_id, key) do
+      {:ok, entry} ->
+        {:reply, {:ok, %{type: "memory", event: "entry", payload: entry}}, socket}
+
+      :not_found ->
+        {:reply, {:error, %{reason: "not_found"}}, socket}
+    end
+  end
+
+  def handle_in("memory:get", _payload, socket) do
+    {:reply, {:error, %{reason: "payload must include \"key\""}}, socket}
+  end
+
+  # ── memory:delete — delete a memory entry ──────────────────
+
+  def handle_in("memory:delete", %{"payload" => %{"key" => key}}, socket) do
+    case Hub.Memory.delete(socket.assigns.fleet_id, key) do
+      :ok ->
+        {:reply, {:ok, %{deleted: true}}, socket}
+
+      :not_found ->
+        {:reply, {:error, %{reason: "not_found"}}, socket}
+    end
+  end
+
+  def handle_in("memory:delete", _payload, socket) do
+    {:reply, {:error, %{reason: "payload must include \"key\""}}, socket}
+  end
+
+  # ── memory:list — list memory entries ──────────────────────
+
+  def handle_in("memory:list", %{"payload" => payload}, socket) do
+    opts =
+      []
+      |> maybe_opt(:limit, Map.get(payload, "limit"))
+      |> maybe_opt(:offset, Map.get(payload, "offset"))
+      |> maybe_opt(:tags, Map.get(payload, "tags"))
+      |> maybe_opt(:author, Map.get(payload, "author"))
+
+    {:ok, entries} = Hub.Memory.list(socket.assigns.fleet_id, opts)
+
+    {:reply, {:ok, %{
+      type: "memory",
+      event: "list",
+      payload: %{entries: entries, count: length(entries)}
+    }}, socket}
+  end
+
+  def handle_in("memory:list", _payload, socket) do
+    handle_in("memory:list", %{"payload" => %{}}, socket)
+  end
+
+  # ── memory:query — search memory entries ───────────────────
+
+  def handle_in("memory:query", %{"payload" => payload}, socket) do
+    sort =
+      case Map.get(payload, "sort") do
+        "relevance" -> :relevance
+        "created_at" -> :created_at
+        "updated_at" -> :updated_at
+        "access_count" -> :access_count
+        _ -> nil
+      end
+
+    opts =
+      []
+      |> maybe_opt(:limit, Map.get(payload, "limit"))
+      |> maybe_opt(:tags, Map.get(payload, "tags"))
+      |> maybe_opt(:text_search, Map.get(payload, "text_search"))
+      |> maybe_opt(:author, Map.get(payload, "author"))
+      |> maybe_opt(:since, Map.get(payload, "since"))
+      |> maybe_opt(:sort, sort)
+
+    {:ok, entries} = Hub.Memory.query(socket.assigns.fleet_id, opts)
+
+    {:reply, {:ok, %{
+      type: "memory",
+      event: "query",
+      payload: %{entries: entries, count: length(entries)}
+    }}, socket}
+  end
+
+  def handle_in("memory:query", _payload, socket) do
+    handle_in("memory:query", %{"payload" => %{}}, socket)
+  end
+
+  # ── memory:subscribe — subscribe to memory changes ─────────
+
+  def handle_in("memory:subscribe", %{"payload" => %{"pattern" => pattern}}, socket) do
+    fleet_id = socket.assigns.fleet_id
+    topic = Hub.Memory.subscribe_pattern(fleet_id, pattern)
+
+    Phoenix.PubSub.subscribe(Hub.PubSub, topic)
+
+    # Track subscribed patterns for pattern matching in handle_info
+    current_patterns = Map.get(socket.assigns, :memory_patterns, [])
+    events = Map.get(socket.assigns[:memory_subscribe_payload] || %{}, "events", ["set", "delete"])
+
+    pattern_entry = %{pattern: pattern, events: events, topic: topic}
+
+    socket =
+      socket
+      |> assign(:memory_patterns, [pattern_entry | current_patterns])
+
+    {:reply, {:ok, %{subscribed: pattern, topic: topic}}, socket}
+  end
+
+  def handle_in("memory:subscribe", _payload, socket) do
+    {:reply, {:error, %{reason: "payload must include \"pattern\""}}, socket}
+  end
+
   # ── Terminate — cleanup on disconnect ──────────────────────
 
   @impl true
@@ -455,5 +620,28 @@ defmodule Hub.FleetChannel do
       "fleet:#{socket.assigns.fleet_id}:agent:#{target_agent_id}",
       {:direct_activity, msg}
     )
+  end
+
+  # ── Memory Helpers ──────────────────────────────────────────
+
+  defp maybe_opt(opts, _key, nil), do: opts
+  defp maybe_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp pattern_matches?(pattern, key) do
+    cond do
+      pattern == "*" ->
+        true
+
+      String.ends_with?(pattern, "/*") ->
+        prefix = String.trim_trailing(pattern, "/*")
+        String.starts_with?(key, prefix <> "/")
+
+      String.ends_with?(pattern, "*") ->
+        prefix = String.trim_trailing(pattern, "*")
+        String.starts_with?(key, prefix)
+
+      true ->
+        pattern == key
+    end
   end
 end
