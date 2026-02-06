@@ -33,6 +33,7 @@ defmodule Hub.FleetChannel do
   alias Hub.Auth
 
   @valid_states ~w(online busy away offline)
+  @valid_activity_kinds ~w(task_started task_progress task_completed task_failed discovery question alert custom)
 
   # ── Join ────────────────────────────────────────────────────
 
@@ -74,6 +75,23 @@ defmodule Hub.FleetChannel do
       "payload" => %{"agents" => roster}
     })
 
+    # Subscribe to agent-specific direct delivery topic
+    Phoenix.PubSub.subscribe(Hub.PubSub, "fleet:#{socket.assigns.fleet_id}:agent:#{socket.assigns.agent_id}")
+
+    {:noreply, socket}
+  end
+
+  # Tagged activity delivery (from PubSub subscription)
+  @impl true
+  def handle_info({:tagged_activity, msg}, socket) do
+    push(socket, "activity:broadcast", msg)
+    {:noreply, socket}
+  end
+
+  # Direct activity delivery (from PubSub subscription)
+  @impl true
+  def handle_info({:direct_activity, msg}, socket) do
+    push(socket, "activity:broadcast", msg)
     {:noreply, socket}
   end
 
@@ -131,6 +149,149 @@ defmodule Hub.FleetChannel do
       "event" => "roster",
       "payload" => %{"agents" => roster}
     }}, socket}
+  end
+
+  # ── activity:broadcast — publish activity event ─────────────
+
+  def handle_in("activity:broadcast", %{"payload" => payload}, socket) do
+    kind = Map.get(payload, "kind")
+
+    cond do
+      kind not in @valid_activity_kinds ->
+        {:reply, {:error, %{reason: "invalid kind, must be one of: #{Enum.join(@valid_activity_kinds, ", ")}"}}, socket}
+
+      true ->
+        event_id = "evt_" <> gen_uuid()
+        scope = Map.get(payload, "scope", "fleet")
+
+        event = %{
+          "event_id" => event_id,
+          "from" => %{
+            "agent_id" => socket.assigns.agent_id,
+            "name" => get_agent_name(socket)
+          },
+          "kind" => kind,
+          "description" => Map.get(payload, "description", ""),
+          "tags" => Map.get(payload, "tags", []),
+          "data" => Map.get(payload, "data", %{}),
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        }
+
+        broadcast_msg = %{
+          "type" => "activity",
+          "event" => "broadcast",
+          "payload" => event
+        }
+
+        # Scope-based delivery
+        case scope do
+          "fleet" ->
+            broadcast!(socket, "activity:broadcast", broadcast_msg)
+
+          "tagged" ->
+            tags = Map.get(payload, "tags", [])
+            broadcast_to_tagged(socket, tags, broadcast_msg)
+
+          "direct" ->
+            to = Map.get(payload, "to")
+
+            if to do
+              broadcast_to_agent(socket, to, broadcast_msg)
+            else
+              broadcast!(socket, "activity:broadcast", broadcast_msg)
+            end
+
+          _ ->
+            broadcast!(socket, "activity:broadcast", broadcast_msg)
+        end
+
+        # Async publish to EventBus for durability — never block the channel
+        fleet_id = socket.assigns.fleet_id
+        bus_topic = "ringforge.#{fleet_id}.activity"
+
+        Task.start(fn ->
+          case Hub.EventBus.publish(bus_topic, event) do
+            :ok -> :ok
+            {:error, reason} ->
+              Logger.warning("[FleetChannel] EventBus publish failed: #{inspect(reason)}")
+          end
+        end)
+
+        {:reply, {:ok, %{event_id: event_id}}, socket}
+    end
+  end
+
+  def handle_in("activity:broadcast", payload, socket) when is_map(payload) do
+    handle_in("activity:broadcast", %{"payload" => payload}, socket)
+  end
+
+  # ── activity:subscribe — subscribe to tagged activity ──────
+
+  def handle_in("activity:subscribe", %{"payload" => %{"tags" => tags}}, socket) when is_list(tags) do
+    current = Map.get(socket.assigns, :activity_tags, MapSet.new())
+    new_tags = Enum.reject(tags, &MapSet.member?(current, &1))
+
+    # Subscribe this channel process to tag-specific PubSub topics
+    Enum.each(new_tags, fn tag ->
+      Phoenix.PubSub.subscribe(Hub.PubSub, "fleet:#{socket.assigns.fleet_id}:tag:#{tag}")
+    end)
+
+    updated = Enum.reduce(tags, current, &MapSet.put(&2, &1))
+    socket = assign(socket, :activity_tags, updated)
+    {:reply, {:ok, %{subscribed_tags: MapSet.to_list(updated)}}, socket}
+  end
+
+  def handle_in("activity:subscribe", _payload, socket) do
+    {:reply, {:error, %{reason: "payload must include \"tags\" list"}}, socket}
+  end
+
+  # ── activity:unsubscribe — remove tag subscriptions ────────
+
+  def handle_in("activity:unsubscribe", %{"payload" => %{"tags" => tags}}, socket) when is_list(tags) do
+    current = Map.get(socket.assigns, :activity_tags, MapSet.new())
+
+    # Unsubscribe from tag-specific PubSub topics
+    Enum.each(tags, fn tag ->
+      if MapSet.member?(current, tag) do
+        Phoenix.PubSub.unsubscribe(Hub.PubSub, "fleet:#{socket.assigns.fleet_id}:tag:#{tag}")
+      end
+    end)
+
+    updated = Enum.reduce(tags, current, &MapSet.delete(&2, &1))
+    socket = assign(socket, :activity_tags, updated)
+    {:reply, {:ok, %{subscribed_tags: MapSet.to_list(updated)}}, socket}
+  end
+
+  def handle_in("activity:unsubscribe", _payload, socket) do
+    {:reply, {:error, %{reason: "payload must include \"tags\" list"}}, socket}
+  end
+
+  # ── activity:history — replay recent events ────────────────
+
+  def handle_in("activity:history", %{"payload" => payload}, socket) do
+    fleet_id = socket.assigns.fleet_id
+    bus_topic = "ringforge.#{fleet_id}.activity"
+    limit = Map.get(payload, "limit", 50)
+    kinds = Map.get(payload, "kinds")
+
+    opts = [limit: limit]
+    opts = if kinds, do: Keyword.put(opts, :kinds, kinds), else: opts
+
+    case Hub.EventBus.replay(bus_topic, opts) do
+      {:ok, events} ->
+        {:reply, {:ok, %{
+          "type" => "activity",
+          "event" => "history",
+          "payload" => %{"events" => events, "count" => length(events)}
+        }}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{reason: "replay failed: #{inspect(reason)}"}}, socket}
+    end
+  end
+
+  def handle_in("activity:history", _payload, socket) do
+    handle_in("activity:history", %{"payload" => %{}}, socket)
   end
 
   # ── Terminate — cleanup on disconnect ──────────────────────
@@ -243,5 +404,56 @@ defmodule Hub.FleetChannel do
       "load" => meta[:load] || meta["load"] || 0.0,
       "connected_at" => meta[:connected_at] || meta["connected_at"]
     }
+  end
+
+  # ── Activity Helpers ────────────────────────────────────────
+
+  defp gen_uuid do
+    <<a::32, b::16, c::16, d::16, e::48>> = :crypto.strong_rand_bytes(16)
+
+    [
+      Base.encode16(<<a::32>>, case: :lower),
+      Base.encode16(<<b::16>>, case: :lower),
+      Base.encode16(<<c::16>>, case: :lower),
+      Base.encode16(<<d::16>>, case: :lower),
+      Base.encode16(<<e::48>>, case: :lower)
+    ]
+    |> Enum.join("-")
+  end
+
+  defp get_agent_name(socket) do
+    case FleetPresence.get_by_key(socket, socket.assigns.agent_id) do
+      %{metas: [meta | _]} -> meta[:name] || socket.assigns.agent_id
+      _ -> socket.assigns.agent_id
+    end
+  end
+
+  defp broadcast_to_tagged(socket, tags, msg) do
+
+    # Get all connected channel pids from Presence and filter by tag subscriptions
+    # Since we can't iterate socket assigns of other processes directly,
+    # we use PubSub with intercept for tagged delivery.
+    # For now, broadcast to all and let clients filter, but also
+    # use a tagged subtopic for efficient server-side filtering.
+    Enum.each(tags, fn tag ->
+      Phoenix.PubSub.broadcast(
+        Hub.PubSub,
+        "fleet:#{socket.assigns.fleet_id}:tag:#{tag}",
+        {:tagged_activity, msg}
+      )
+    end)
+
+    # Also broadcast on the main topic for clients that want everything
+    # (they can filter client-side by tags)
+    broadcast!(socket, "activity:broadcast", msg)
+  end
+
+  defp broadcast_to_agent(socket, target_agent_id, msg) do
+    # Direct delivery via agent-specific PubSub topic
+    Phoenix.PubSub.broadcast(
+      Hub.PubSub,
+      "fleet:#{socket.assigns.fleet_id}:agent:#{target_agent_id}",
+      {:direct_activity, msg}
+    )
   end
 end

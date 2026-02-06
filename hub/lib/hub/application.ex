@@ -35,11 +35,21 @@ defmodule Hub.Application do
       # Phoenix.Presence for fleet channels
       Hub.FleetPresence,
 
+      # EventBus backend (Local ETS or Kafka — selected by config)
+      event_bus_child(),
+
       # Phoenix endpoint (WebSocket transport)
       Hub.Endpoint
     ]
 
     opts = [strategy: :one_for_one, name: Hub.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp event_bus_child do
+    case Application.get_env(:hub, :event_bus, Hub.EventBus.Local) do
+      Hub.EventBus.Kafka -> Hub.EventBus.Kafka
+      _ -> Hub.EventBus.Local
+    end
   end
 end

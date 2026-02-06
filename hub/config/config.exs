@@ -42,3 +42,10 @@ config :hub, ecto_repos: [Hub.Repo]
 config :hub,
   store_binary: System.get_env("RINGFORGE_STORE_BIN", Path.expand("../../store/target/release/ringforge-store", __DIR__)),
   store_data_dir: System.get_env("RINGFORGE_DATA_DIR", "./data/store")
+
+# EventBus — Local (ETS) for dev, Kafka for production
+config :hub, event_bus: Hub.EventBus.Local
+
+config :hub, Hub.EventBus.Kafka,
+  brokers: [{"localhost", 9094}],
+  client_id: :ringforge_kafka
