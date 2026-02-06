@@ -287,36 +287,55 @@ defmodule Hub.Live.DashboardLive do
 
   defp render_login(assigns) do
     ~H"""
-    <div class="min-h-screen flex items-center justify-center bg-gray-950">
-      <div class="bg-gray-900 rounded-lg border border-gray-800 p-8 w-full max-w-md shadow-xl">
-        <div class="text-center mb-6">
-          <h1 class="text-2xl font-bold text-amber-400">🔨 RingForge</h1>
-          <p class="text-gray-400 mt-2 text-sm">Enter your admin API key to continue</p>
+    <div class="min-h-screen flex items-center justify-center bg-rf-bg bg-grid relative overflow-hidden">
+      <%!-- Radial glow behind card --%>
+      <div class="absolute inset-0 bg-radial-glow pointer-events-none"></div>
+      <div class="absolute inset-0 pointer-events-none" style="background: radial-gradient(circle at 50% 50%, rgba(245,158,11,0.04) 0%, transparent 50%);"></div>
+
+      <div class="relative z-10 glass-card rounded-2xl p-10 w-full max-w-md shadow-2xl fade-in-up" style="box-shadow: 0 0 60px rgba(245,158,11,0.06), 0 25px 50px rgba(0,0,0,0.4);">
+        <div class="text-center mb-8">
+          <%!-- Logo mark --%>
+          <div class="inline-flex items-center justify-center w-14 h-14 rounded-xl bg-gradient-to-br from-amber-500/20 to-amber-600/5 border border-amber-500/20 mb-5">
+            <span class="text-2xl font-bold text-amber-400">⚡</span>
+          </div>
+          <h1 class="text-3xl font-bold tracking-tight">
+            <span class="text-rf-text">RING</span><span class="text-amber-400">FORGE</span>
+          </h1>
+          <p class="text-rf-text-muted mt-2 text-xs uppercase tracking-[0.2em]">Agent Coordination Mesh</p>
         </div>
 
-        <form phx-submit="authenticate" class="space-y-4">
+        <form phx-submit="authenticate" class="space-y-5">
           <div>
+            <label class="text-xs text-rf-text-sec uppercase tracking-wider mb-2 block">Admin API Key</label>
             <input
               type="password"
               name="key"
               value={@key_input}
               placeholder="rf_admin_..."
               autocomplete="off"
-              class="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 font-mono text-sm"
+              class="w-full px-4 py-3.5 bg-rf-bg/80 border border-rf-border rounded-xl text-rf-text placeholder-rf-text-muted focus:outline-none focus:border-amber-500/50 focus-glow font-mono text-sm transition-smooth"
             />
           </div>
 
           <%= if @auth_error do %>
-            <div class="text-red-400 text-sm text-center"><%= @auth_error %></div>
+            <div class="flex items-center justify-center gap-2 text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-lg py-2 px-3 fade-in">
+              <span>✕</span>
+              <span><%= @auth_error %></span>
+            </div>
           <% end %>
 
           <button
             type="submit"
-            class="w-full py-3 bg-amber-600 hover:bg-amber-500 text-gray-950 font-bold rounded-lg transition-colors"
+            class="w-full py-3.5 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-gray-950 font-bold rounded-xl transition-smooth text-sm uppercase tracking-wider"
+            style="box-shadow: 0 4px 14px rgba(245,158,11,0.25);"
           >
-            Access Dashboard
+            ⚡ Access Dashboard
           </button>
         </form>
+
+        <div class="mt-6 text-center">
+          <p class="text-rf-text-muted text-[10px] uppercase tracking-widest">Secured Access</p>
+        </div>
       </div>
     </div>
     """
@@ -328,170 +347,260 @@ defmodule Hub.Live.DashboardLive do
 
     filtered = filtered_activities(assigns.activities, assigns.filter)
 
-    assigns = assign(assigns, agents_sorted: agents_sorted, filtered_activities: filtered)
+    # Fleet status summary counts
+    agent_states = Enum.map(assigns.agents, fn {_id, m} -> m[:state] || "unknown" end)
+    online_count = Enum.count(agent_states, &(&1 == "online"))
+    busy_count = Enum.count(agent_states, &(&1 == "busy"))
+    offline_count = Enum.count(agent_states, &(&1 in ["offline", "away"]))
+
+    assigns = assign(assigns,
+      agents_sorted: agents_sorted,
+      filtered_activities: filtered,
+      online_count: online_count,
+      busy_count: busy_count,
+      offline_count: offline_count
+    )
 
     ~H"""
-    <div class="h-screen flex flex-col overflow-hidden">
+    <div class="h-screen flex flex-col overflow-hidden bg-rf-bg bg-grid">
       <%!-- Header --%>
-      <header class="flex items-center justify-between px-6 py-3 bg-gray-900 border-b border-gray-800 shrink-0">
-        <div class="flex items-center gap-3">
-          <span class="text-xl">🔨</span>
-          <h1 class="text-lg font-bold text-amber-400">RingForge Dashboard</h1>
+      <header class="shrink-0 relative" style="background: linear-gradient(180deg, rgba(17,17,25,0.95) 0%, rgba(10,10,15,0.98) 100%);">
+        <div class="flex items-center justify-between px-6 py-3.5">
+          <div class="flex items-center gap-4">
+            <%!-- Logo --%>
+            <div class="flex items-center gap-2.5">
+              <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500/20 to-amber-600/5 border border-amber-500/20 flex items-center justify-center">
+                <span class="text-amber-400 text-sm font-bold">⚡</span>
+              </div>
+              <div>
+                <h1 class="text-base font-bold tracking-tight leading-none">
+                  <span class="text-rf-text">RING</span><span class="text-amber-400">FORGE</span>
+                </h1>
+                <p class="text-[9px] text-rf-text-muted uppercase tracking-[0.25em] mt-0.5">Agent Coordination Mesh</p>
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center gap-5">
+            <span class="text-xs text-rf-text-muted">
+              Fleet: <span class="text-rf-text-sec font-medium"><%= @fleet_name %></span>
+            </span>
+            <div class="flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border border-green-500/20 bg-green-500/5">
+              <span class="inline-block w-2 h-2 rounded-full bg-green-400 pulse-dot" style="color: #22c55e;"></span>
+              <span class="text-green-400 font-medium uppercase tracking-wider text-[10px]">Live</span>
+            </div>
+          </div>
         </div>
-        <div class="flex items-center gap-4">
-          <span class="text-sm text-gray-400">
-            Fleet: <span class="text-gray-200"><%= @fleet_name %></span>
-          </span>
-          <span class="text-xs px-2 py-1 bg-green-900/50 text-green-400 rounded border border-green-800">
-            LIVE
-          </span>
-        </div>
+        <%!-- Gradient border bottom --%>
+        <div class="h-px" style="background: linear-gradient(90deg, transparent 0%, rgba(245,158,11,0.3) 30%, rgba(245,158,11,0.5) 50%, rgba(245,158,11,0.3) 70%, transparent 100%);"></div>
       </header>
 
       <%!-- Main grid --%>
-      <div class="flex-1 grid grid-cols-[280px_1fr] grid-rows-[1fr_220px] min-h-0">
+      <div class="flex-1 grid grid-cols-[300px_1fr] min-h-0">
 
-        <%!-- Left sidebar: Agents --%>
-        <div class="border-r border-gray-800 overflow-y-auto bg-gray-900/50">
+        <%!-- Left sidebar --%>
+        <div class="border-r border-rf-border overflow-y-auto" style="background: linear-gradient(180deg, rgba(17,17,25,0.5) 0%, rgba(10,10,15,0.3) 100%);">
           <div class="p-4">
-            <h2 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">
-              Agents
-              <span class="ml-2 text-amber-400"><%= map_size(@agents) %></span>
-            </h2>
 
+            <%!-- Fleet Status Summary --%>
+            <div class="glass-card rounded-xl p-3.5 mb-4">
+              <h2 class="text-[10px] font-semibold text-rf-text-muted uppercase tracking-[0.15em] mb-3">Fleet Status</h2>
+              <div class="flex items-center gap-4 text-xs">
+                <div class="flex items-center gap-1.5">
+                  <span class="inline-block w-2 h-2 rounded-full bg-green-400"></span>
+                  <span class="text-rf-text-sec"><%= @online_count %> online</span>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <span class="inline-block w-2 h-2 rounded-full bg-yellow-400"></span>
+                  <span class="text-rf-text-sec"><%= @busy_count %> busy</span>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <span class="inline-block w-2 h-2 rounded-full bg-rf-text-muted"></span>
+                  <span class="text-rf-text-sec"><%= @offline_count %> offline</span>
+                </div>
+              </div>
+            </div>
+
+            <%!-- Agent label --%>
+            <div class="flex items-center justify-between mb-3">
+              <h2 class="text-[10px] font-semibold text-rf-text-muted uppercase tracking-[0.15em]">Agents</h2>
+              <span class="text-[10px] font-mono text-amber-400/70"><%= map_size(@agents) %></span>
+            </div>
+
+            <%!-- Empty state --%>
             <%= if map_size(@agents) == 0 do %>
-              <div class="text-gray-600 text-sm italic py-4">No agents connected</div>
+              <div class="glass-card rounded-xl p-6 text-center">
+                <div class="text-2xl mb-3 float-subtle">◇</div>
+                <p class="text-rf-text-muted text-xs">Waiting for agents to connect...</p>
+                <div class="mt-3 h-px shimmer rounded"></div>
+              </div>
             <% end %>
 
+            <%!-- Agent Cards --%>
             <%= for {agent_id, meta} <- @agents_sorted do %>
               <div
                 phx-click="select_agent"
                 phx-value-agent-id={agent_id}
-                class={"p-3 rounded-lg mb-2 cursor-pointer transition-colors border " <> if(@selected_agent == agent_id, do: "border-amber-500/50 bg-amber-500/10", else: "border-transparent hover:bg-gray-800/50")}
+                class={"glass-card rounded-xl p-3.5 mb-2.5 cursor-pointer transition-smooth " <> if(@selected_agent == agent_id, do: "border-glow !border-amber-500/40", else: "")}
+                style={if @selected_agent == agent_id, do: "box-shadow: 0 0 20px rgba(245,158,11,0.08);", else: ""}
               >
-                <div class="flex items-center gap-2">
-                  <span class={"inline-block w-2.5 h-2.5 rounded-full " <> state_color(meta[:state]) <> if(meta[:state] in ["online", "busy"], do: " pulse-dot", else: "")}></span>
-                  <span class="font-medium text-sm text-gray-100 truncate"><%= meta[:name] || agent_id %></span>
+                <div class="flex items-center gap-2.5">
+                  <span
+                    class={"inline-block w-2.5 h-2.5 rounded-full shrink-0 " <> state_color(meta[:state]) <> if(meta[:state] in ["online", "busy"], do: " pulse-dot", else: "")}
+                    style={"color: " <> state_dot_color(meta[:state]) <> ";"}
+                  ></span>
+                  <span class="font-semibold text-sm text-rf-text truncate"><%= meta[:name] || agent_id %></span>
+                  <span class={"ml-auto text-[10px] px-2 py-0.5 rounded-full font-medium " <> state_badge(meta[:state])}>
+                    <%= meta[:state] || "unknown" %>
+                  </span>
                 </div>
-                <div class="ml-5 mt-1">
-                  <span class="text-xs text-gray-500"><%= meta[:state] || "unknown" %></span>
-                  <%= if meta[:task] do %>
-                    <div class="text-xs text-gray-400 mt-0.5 truncate" title={meta[:task]}>
-                      📋 <%= meta[:task] %>
-                    </div>
-                  <% end %>
-                  <%= if meta[:capabilities] && meta[:capabilities] != [] do %>
-                    <div class="flex flex-wrap gap-1 mt-1">
-                      <%= for cap <- Enum.take(List.wrap(meta[:capabilities]), 4) do %>
-                        <span class="text-[10px] px-1.5 py-0.5 bg-gray-800 text-gray-400 rounded"><%= cap %></span>
-                      <% end %>
-                    </div>
-                  <% end %>
-                </div>
+                <%= if meta[:task] do %>
+                  <div class="mt-2 ml-5 text-xs text-rf-text-sec truncate flex items-center gap-1.5" title={meta[:task]}>
+                    <span class="text-rf-text-muted">▸</span>
+                    <span><%= meta[:task] %></span>
+                  </div>
+                <% end %>
+                <%= if meta[:capabilities] && meta[:capabilities] != [] do %>
+                  <div class="flex flex-wrap gap-1.5 mt-2.5 ml-5">
+                    <%= for cap <- Enum.take(List.wrap(meta[:capabilities]), 5) do %>
+                      <span class="text-[10px] px-2 py-0.5 rounded-full bg-rf-border text-rf-text-sec border border-rf-border-bright/50"><%= cap %></span>
+                    <% end %>
+                  </div>
+                <% end %>
               </div>
             <% end %>
           </div>
         </div>
 
-        <%!-- Main area: Activity Feed --%>
-        <div class="overflow-hidden flex flex-col bg-gray-950">
-          <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between shrink-0">
-            <h2 class="text-xs font-bold text-gray-500 uppercase tracking-wider">Activity Feed</h2>
-            <div class="flex gap-1">
-              <%= for {label, value} <- [{"All", "all"}, {"Tasks", "tasks"}, {"Discoveries", "discoveries"}, {"Alerts", "alerts"}] do %>
-                <button
-                  phx-click="set_filter"
-                  phx-value-filter={value}
-                  class={"text-xs px-2.5 py-1 rounded transition-colors " <> if(@filter == value, do: "bg-amber-600/20 text-amber-400 border border-amber-600/40", else: "text-gray-500 hover:text-gray-300 border border-transparent")}
-                >
-                  <%= label %>
-                </button>
+        <%!-- Right content area --%>
+        <div class="flex flex-col min-h-0 overflow-hidden">
+
+          <%!-- Activity Feed --%>
+          <div class="flex-1 flex flex-col overflow-hidden">
+            <div class="px-5 py-3 flex items-center justify-between shrink-0 border-b border-rf-border">
+              <div class="flex items-center gap-2.5">
+                <h2 class="text-[10px] font-semibold text-rf-text-muted uppercase tracking-[0.15em]">Live Activity</h2>
+                <span class="inline-block w-1.5 h-1.5 rounded-full bg-green-400 pulse-glow" style="color: #22c55e;"></span>
+              </div>
+              <%!-- Segment control filter --%>
+              <div class="flex bg-rf-card rounded-lg p-0.5 border border-rf-border">
+                <%= for {label, value} <- [{"All", "all"}, {"Tasks", "tasks"}, {"Discoveries", "discoveries"}, {"Alerts", "alerts"}] do %>
+                  <button
+                    phx-click="set_filter"
+                    phx-value-filter={value}
+                    class={"text-[10px] px-3 py-1.5 rounded-md font-medium transition-smooth uppercase tracking-wider " <> if(@filter == value, do: "bg-amber-500/15 text-amber-400 shadow-sm", else: "text-rf-text-muted hover:text-rf-text-sec")}
+                  >
+                    <%= label %>
+                  </button>
+                <% end %>
+              </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto px-5 py-3 space-y-1.5" id="activity-feed">
+              <%= if @filtered_activities == [] do %>
+                <div class="flex flex-col items-center justify-center py-16 text-center">
+                  <div class="text-3xl mb-4 float-subtle opacity-30">◈</div>
+                  <p class="text-rf-text-muted text-xs uppercase tracking-wider">No activity yet</p>
+                  <p class="text-rf-text-muted/50 text-[10px] mt-1">Events will appear here in real-time</p>
+                </div>
+              <% end %>
+
+              <%= for activity <- @filtered_activities do %>
+                <div class={"fade-in accent-bar pl-4 py-2.5 pr-3 rounded-lg hover:bg-rf-card/50 group transition-smooth " <> kind_color(activity.kind)}>
+                  <div class="flex items-start gap-3">
+                    <span class="text-[10px] text-rf-text-muted whitespace-nowrap mt-0.5 font-mono">
+                      <%= format_time(activity.timestamp) %>
+                    </span>
+                    <span class="text-sm mt-px"><%= kind_icon(activity.kind) %></span>
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-2">
+                        <span class="text-sm font-semibold text-rf-text"><%= activity.agent_name %></span>
+                        <span class={"text-[10px] px-2 py-0.5 rounded-full font-medium " <> kind_badge_style(activity.kind)}>
+                          <%= activity.kind %>
+                        </span>
+                      </div>
+                      <div class="text-xs text-rf-text-sec mt-0.5 truncate"><%= activity.description %></div>
+                    </div>
+                  </div>
+                </div>
               <% end %>
             </div>
           </div>
 
-          <div class="flex-1 overflow-y-auto p-4 space-y-1" id="activity-feed">
-            <%= if @filtered_activities == [] do %>
-              <div class="text-gray-600 text-sm italic py-8 text-center">No activity yet</div>
-            <% end %>
+          <%!-- Bottom panels --%>
+          <div class="shrink-0 border-t border-rf-border grid grid-cols-[1fr_1fr]" style="height: 220px;">
 
-            <%= for activity <- @filtered_activities do %>
-              <div class="fade-in flex gap-3 py-2 px-3 rounded hover:bg-gray-900/50 group">
-                <span class="text-xs text-gray-600 whitespace-nowrap mt-0.5 font-mono">
-                  <%= format_time(activity.timestamp) %>
-                </span>
-                <span class="text-sm"><%= kind_icon(activity.kind) %></span>
-                <div class="min-w-0 flex-1">
-                  <span class={"text-sm font-medium " <> kind_color(activity.kind)}><%= activity.agent_name %>:</span>
-                  <span class="text-sm text-gray-300 ml-1"><%= activity.kind %></span>
-                  <div class="text-xs text-gray-500 truncate mt-0.5"><%= activity.description %></div>
+            <%!-- Send Message --%>
+            <div class="p-4 border-r border-rf-border overflow-y-auto">
+              <h2 class="text-[10px] font-semibold text-rf-text-muted uppercase tracking-[0.15em] mb-3">Send Message</h2>
+              <form phx-submit="send_message" class="space-y-2.5">
+                <div>
+                  <label class="text-[10px] text-rf-text-muted uppercase tracking-wider mb-1 block">To</label>
+                  <input
+                    type="text"
+                    name="to"
+                    value={@msg_to}
+                    phx-keyup="update_msg_to"
+                    placeholder="agent_id"
+                    class="w-full px-3 py-2.5 bg-rf-bg/80 border border-rf-border rounded-lg text-sm text-rf-text placeholder-rf-text-muted focus:outline-none focus:border-amber-500/50 focus-glow font-mono transition-smooth"
+                  />
                 </div>
-              </div>
-            <% end %>
-          </div>
-        </div>
-
-        <%!-- Bottom left: Send Message --%>
-        <div class="border-r border-t border-gray-800 bg-gray-900/50 p-4 overflow-y-auto">
-          <h2 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Send Message</h2>
-          <form phx-submit="send_message" class="space-y-2">
-            <div>
-              <label class="text-xs text-gray-500">To</label>
-              <input
-                type="text"
-                name="to"
-                value={@msg_to}
-                phx-keyup="update_msg_to"
-                placeholder="agent_id"
-                class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-amber-500 font-mono"
-              />
-            </div>
-            <div>
-              <label class="text-xs text-gray-500">Message</label>
-              <textarea
-                name="body"
-                phx-keyup="update_msg_body"
-                placeholder="Type a message..."
-                rows="2"
-                class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-amber-500 font-mono resize-none"
-              ><%= @msg_body %></textarea>
-            </div>
-            <button
-              type="submit"
-              class="w-full py-2 bg-amber-600 hover:bg-amber-500 text-gray-950 font-bold rounded text-sm transition-colors disabled:opacity-50"
-            >
-              Send →
-            </button>
-            <%= if @msg_status do %>
-              <div class={"text-xs text-center mt-1 " <> msg_status_color(@msg_status)} phx-click="clear_msg_status">
-                <%= msg_status_text(@msg_status) %>
-              </div>
-            <% end %>
-          </form>
-        </div>
-
-        <%!-- Bottom right: Quota Usage --%>
-        <div class="border-t border-gray-800 bg-gray-950 p-4 overflow-y-auto">
-          <h2 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Quota Usage</h2>
-          <div class="grid grid-cols-2 gap-4">
-            <%= for {resource, label, icon} <- quota_resources() do %>
-              <% info = Map.get(@usage, resource, %{used: 0, limit: 0}) %>
-              <% pct = quota_percentage(info) %>
-              <div class="space-y-1.5">
-                <div class="flex items-center justify-between text-xs">
-                  <span class="text-gray-400"><%= icon %> <%= label %></span>
-                  <span class="text-gray-500 font-mono">
-                    <%= format_quota_number(info[:used] || Map.get(info, :used, 0)) %>/<%= format_quota_limit(info[:limit] || Map.get(info, :limit, 0)) %>
-                  </span>
+                <div>
+                  <label class="text-[10px] text-rf-text-muted uppercase tracking-wider mb-1 block">Message</label>
+                  <textarea
+                    name="body"
+                    phx-keyup="update_msg_body"
+                    placeholder="Type a message..."
+                    rows="2"
+                    class="w-full px-3 py-2.5 bg-rf-bg/80 border border-rf-border rounded-lg text-sm text-rf-text placeholder-rf-text-muted focus:outline-none focus:border-amber-500/50 focus-glow font-mono resize-none transition-smooth"
+                  ><%= @msg_body %></textarea>
                 </div>
-                <div class="h-2 bg-gray-800 rounded-full overflow-hidden">
+                <button
+                  type="submit"
+                  class="w-full py-2.5 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-gray-950 font-bold rounded-lg text-xs transition-smooth uppercase tracking-wider"
+                  style="box-shadow: 0 2px 10px rgba(245,158,11,0.2);"
+                >
+                  ⚡ Send Message
+                </button>
+                <%= if @msg_status do %>
                   <div
-                    class={"h-full rounded-full transition-all duration-500 " <> quota_bar_color(pct)}
-                    style={"width: #{pct}%"}
-                  ></div>
-                </div>
+                    class={"text-xs text-center py-2 px-3 rounded-lg cursor-pointer fade-in " <> msg_toast_style(@msg_status)}
+                    phx-click="clear_msg_status"
+                  >
+                    <%= msg_status_text(@msg_status) %>
+                  </div>
+                <% end %>
+              </form>
+            </div>
+
+            <%!-- System Metrics --%>
+            <div class="p-4 overflow-y-auto">
+              <h2 class="text-[10px] font-semibold text-rf-text-muted uppercase tracking-[0.15em] mb-3">System Metrics</h2>
+              <div class="space-y-3.5">
+                <%= for {resource, label, icon} <- quota_resources() do %>
+                  <% info = Map.get(@usage, resource, %{used: 0, limit: 0}) %>
+                  <% pct = quota_percentage(info) %>
+                  <div>
+                    <div class="flex items-center justify-between text-xs mb-1.5">
+                      <span class="text-rf-text-sec flex items-center gap-1.5">
+                        <span><%= icon %></span>
+                        <span class="text-[10px] uppercase tracking-wider"><%= label %></span>
+                      </span>
+                      <span class="text-rf-text-muted font-mono text-[11px]">
+                        <span class="text-rf-text-sec"><%= format_quota_number(info[:used] || Map.get(info, :used, 0)) %></span>
+                        <span class="text-rf-text-muted">/</span>
+                        <span><%= format_quota_limit(info[:limit] || Map.get(info, :limit, 0)) %></span>
+                      </span>
+                    </div>
+                    <div class="h-2 bg-rf-border/50 rounded-full overflow-hidden">
+                      <div
+                        class={"h-full rounded-full transition-all duration-700 ease-out " <> quota_bar_style(pct)}
+                        style={"width: #{max(pct, 2)}%"}
+                      ></div>
+                    </div>
+                  </div>
+                <% end %>
               </div>
-            <% end %>
+            </div>
           </div>
         </div>
       </div>
@@ -684,6 +793,36 @@ defmodule Hub.Live.DashboardLive do
   defp state_color("offline"), do: "bg-red-500"
   defp state_color(_), do: "bg-gray-600"
 
+  defp state_dot_color("online"), do: "#22c55e"
+  defp state_dot_color("busy"), do: "#eab308"
+  defp state_dot_color("away"), do: "#94a3b8"
+  defp state_dot_color("offline"), do: "#ef4444"
+  defp state_dot_color(_), do: "#475569"
+
+  defp state_badge("online"), do: "bg-green-500/15 text-green-400 border border-green-500/20"
+  defp state_badge("busy"), do: "bg-yellow-500/15 text-yellow-400 border border-yellow-500/20"
+  defp state_badge("away"), do: "bg-gray-500/15 text-gray-400 border border-gray-500/20"
+  defp state_badge("offline"), do: "bg-red-500/15 text-red-400 border border-red-500/20"
+  defp state_badge(_), do: "bg-gray-500/15 text-gray-400 border border-gray-500/20"
+
+  defp kind_badge_style("task_completed"), do: "bg-green-500/15 text-green-400"
+  defp kind_badge_style("task_started"), do: "bg-blue-500/15 text-blue-400"
+  defp kind_badge_style("task_progress"), do: "bg-cyan-500/15 text-cyan-400"
+  defp kind_badge_style("task_failed"), do: "bg-red-500/15 text-red-400"
+  defp kind_badge_style("discovery"), do: "bg-purple-500/15 text-purple-400"
+  defp kind_badge_style("question"), do: "bg-yellow-500/15 text-yellow-400"
+  defp kind_badge_style("alert"), do: "bg-red-500/15 text-red-400"
+  defp kind_badge_style("join"), do: "bg-green-500/15 text-green-400"
+  defp kind_badge_style("leave"), do: "bg-gray-500/15 text-gray-400"
+  defp kind_badge_style(_), do: "bg-rf-border text-rf-text-sec"
+
+  defp msg_toast_style({:ok, _}), do: "bg-green-500/10 text-green-400 border border-green-500/20"
+  defp msg_toast_style({:error, _}), do: "bg-red-500/10 text-red-400 border border-red-500/20"
+
+  defp quota_bar_style(pct) when pct >= 95, do: "bg-gradient-to-r from-red-500 to-red-400 bar-glow-red"
+  defp quota_bar_style(pct) when pct >= 80, do: "bg-gradient-to-r from-yellow-500 to-yellow-400 bar-glow-yellow"
+  defp quota_bar_style(_), do: "bg-gradient-to-r from-green-500 to-emerald-400 bar-glow-green"
+
   defp state_sort_order("online"), do: 0
   defp state_sort_order("busy"), do: 1
   defp state_sort_order("away"), do: 2
@@ -706,10 +845,6 @@ defmodule Hub.Live.DashboardLive do
   end
   defp quota_percentage(_), do: 0
 
-  defp quota_bar_color(pct) when pct >= 95, do: "bg-red-500"
-  defp quota_bar_color(pct) when pct >= 80, do: "bg-yellow-500"
-  defp quota_bar_color(_), do: "bg-green-500"
-
   defp format_quota_number(n) when is_integer(n) and n >= 1000 do
     "#{Float.round(n / 1000, 1)}K"
   end
@@ -720,9 +855,6 @@ defmodule Hub.Live.DashboardLive do
     "#{Float.round(n / 1000, 1)}K"
   end
   defp format_quota_limit(n), do: "#{n}"
-
-  defp msg_status_color({:ok, _}), do: "text-green-400"
-  defp msg_status_color({:error, _}), do: "text-red-400"
 
   defp msg_status_text({:ok, status}), do: "✓ Message #{status}"
   defp msg_status_text({:error, reason}), do: "✗ #{reason}"
