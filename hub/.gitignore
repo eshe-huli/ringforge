@@ -25,3 +25,5 @@ hub-*.tar
 # Temporary files, for example, from tests.
 /tmp/
 data/
+test_memory.exs
+test_phase4.exs

@@ -42,11 +42,18 @@ defmodule Hub.FleetChannel do
   @impl true
   def join("fleet:" <> fleet_id, payload, socket) do
     # Verify the socket's fleet_id matches the requested topic
-    if socket.assigns.fleet_id != fleet_id do
-      {:error, %{reason: "fleet_id mismatch"}}
-    else
-      send(self(), {:after_join, payload})
-      {:ok, socket}
+    cond do
+      socket.assigns.fleet_id != fleet_id ->
+        {:error, %{reason: "fleet_id mismatch"}}
+
+      not quota_ok?(socket.assigns.tenant_id, :connected_agents) ->
+        {:error, %{reason: "quota_exceeded", resource: "connected_agents"}}
+
+      true ->
+        # Increment connected_agents quota on successful join
+        Hub.Quota.increment(socket.assigns.tenant_id, :connected_agents)
+        send(self(), {:after_join, payload})
+        {:ok, socket}
     end
   end
 
@@ -117,6 +124,12 @@ defmodule Hub.FleetChannel do
       "payload" => Map.drop(envelope, ["to"])
     })
 
+    {:noreply, socket}
+  end
+
+  # Quota warnings (from PubSub)
+  def handle_info({:quota_warning, msg}, socket) do
+    push(socket, "system:quota_warning", msg)
     {:noreply, socket}
   end
 
@@ -215,7 +228,11 @@ defmodule Hub.FleetChannel do
       kind not in @valid_activity_kinds ->
         {:reply, {:error, %{reason: "invalid kind, must be one of: #{Enum.join(@valid_activity_kinds, ", ")}"}}, socket}
 
+      not quota_ok?(socket.assigns.tenant_id, :messages_today) ->
+        {:reply, {:error, %{reason: "quota_exceeded", resource: "messages_today"}}, socket}
+
       true ->
+        Hub.Quota.increment(socket.assigns.tenant_id, :messages_today)
         event_id = "evt_" <> gen_uuid()
         scope = Map.get(payload, "scope", "fleet")
 
@@ -354,15 +371,21 @@ defmodule Hub.FleetChannel do
   def handle_in("memory:set", %{"payload" => payload}, socket) do
     key = Map.get(payload, "key")
 
-    if is_nil(key) or key == "" do
-      {:reply, {:error, %{reason: "key is required"}}, socket}
-    else
-      params = Map.put(payload, "author", socket.assigns.agent_id)
+    cond do
+      is_nil(key) or key == "" ->
+        {:reply, {:error, %{reason: "key is required"}}, socket}
 
-      case Hub.Memory.set(socket.assigns.fleet_id, key, params) do
-        {:ok, entry} ->
-          {:reply, {:ok, %{id: entry["id"], key: entry["key"], version: 1}}, socket}
-      end
+      not quota_ok?(socket.assigns.tenant_id, :memory_entries) ->
+        {:reply, {:error, %{reason: "quota_exceeded", resource: "memory_entries"}}, socket}
+
+      true ->
+        Hub.Quota.increment(socket.assigns.tenant_id, :memory_entries)
+        params = Map.put(payload, "author", socket.assigns.agent_id)
+
+        case Hub.Memory.set(socket.assigns.fleet_id, key, params) do
+          {:ok, entry} ->
+            {:reply, {:ok, %{id: entry["id"], key: entry["key"], version: 1}}, socket}
+        end
     end
   end
 
@@ -498,7 +521,11 @@ defmodule Hub.FleetChannel do
       to == socket.assigns.agent_id ->
         {:reply, {:error, %{reason: "cannot send a message to yourself"}}, socket}
 
+      not quota_ok?(socket.assigns.tenant_id, :messages_today) ->
+        {:reply, {:error, %{reason: "quota_exceeded", resource: "messages_today"}}, socket}
+
       true ->
+        Hub.Quota.increment(socket.assigns.tenant_id, :messages_today)
         case DirectMessage.send_message(
                socket.assigns.fleet_id,
                socket.assigns.agent_id,
@@ -597,6 +624,9 @@ defmodule Hub.FleetChannel do
   @impl true
   def terminate(_reason, socket) do
     agent_id = socket.assigns.agent_id
+
+    # Decrement connected_agents quota
+    Hub.Quota.decrement(socket.assigns.tenant_id, :connected_agents)
 
     # Broadcast left event
     broadcast!(socket, "presence:left", %{
@@ -775,6 +805,16 @@ defmodule Hub.FleetChannel do
 
       true ->
         pattern == key
+    end
+  end
+
+  # ── Quota Helpers ──────────────────────────────────────────
+
+  defp quota_ok?(tenant_id, resource) do
+    case Hub.Quota.check(tenant_id, resource) do
+      {:ok, :unlimited} -> true
+      {:ok, %{remaining: remaining}} when remaining > 0 -> true
+      _ -> false
     end
   end
 end

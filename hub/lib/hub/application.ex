@@ -38,6 +38,9 @@ defmodule Hub.Application do
       # EventBus backend (Local ETS or Kafka — selected by config)
       event_bus_child(),
 
+      # Quota tracking (ETS-backed, must start before Endpoint)
+      {Hub.Quota, []},
+
       # Phoenix endpoint (WebSocket transport)
       Hub.Endpoint
     ]
