@@ -91,6 +91,12 @@ func (c *Client) Send(msg *PhoenixMessage) error {
 
 // Push sends an event on a topic and waits for a reply (with timeout).
 func (c *Client) Push(topic, event string, payload interface{}, timeout time.Duration) (*PhoenixMessage, error) {
+	return c.PushWithJoinRef(topic, "", event, payload, timeout)
+}
+
+// PushWithJoinRef sends an event on a topic with a join_ref and waits for a reply.
+// The join_ref is required by Phoenix to route the message to the correct channel process.
+func (c *Client) PushWithJoinRef(topic, joinRef, event string, payload interface{}, timeout time.Duration) (*PhoenixMessage, error) {
 	ref := c.NextRef()
 
 	payloadBytes, err := json.Marshal(payload)
@@ -110,6 +116,7 @@ func (c *Client) Push(topic, event string, payload interface{}, timeout time.Dur
 	}()
 
 	msg := &PhoenixMessage{
+		JoinRef: joinRef,
 		Ref:     ref,
 		Topic:   topic,
 		Event:   event,

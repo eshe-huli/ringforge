@@ -23,7 +23,7 @@ and syncs them to the Keyring cluster via Phoenix Channels over WebSocket.`,
 	}
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ~/.keyring/config.toml)")
-	rootCmd.PersistentFlags().StringVar(&serverURL, "server", "ws://localhost:4000/socket/websocket", "Keyring server WebSocket URL")
+	rootCmd.PersistentFlags().StringVar(&serverURL, "server", "ws://localhost:4000/ws/websocket", "Keyring server WebSocket URL")
 
 	rootCmd.AddCommand(initCmd())
 	rootCmd.AddCommand(statusCmd())

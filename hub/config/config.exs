@@ -28,5 +28,5 @@ config :phoenix, :json_library, Jason
 
 # Rust storage engine
 config :hub,
-  store_binary: System.get_env("RINGFORGE_STORE_BIN", Path.expand("../store/target/release/ringforge-store", __DIR__)),
+  store_binary: System.get_env("RINGFORGE_STORE_BIN", Path.expand("../../store/target/release/ringforge-store", __DIR__)),
   store_data_dir: System.get_env("RINGFORGE_DATA_DIR", "./data/store")

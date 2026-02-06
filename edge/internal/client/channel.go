@@ -95,6 +95,7 @@ func (ch *Channel) Join(timeout time.Duration) error {
 // Leave sends a phx_leave message.
 func (ch *Channel) Leave() error {
 	msg := &PhoenixMessage{
+		JoinRef: ch.joinRef,
 		Ref:     ch.client.NextRef(),
 		Topic:   ch.topic,
 		Event:   "phx_leave",
@@ -105,11 +106,13 @@ func (ch *Channel) Leave() error {
 }
 
 // Push sends an event on this channel and waits for a reply.
+// Includes the join_ref so the Phoenix server routes the message
+// to the correct channel process.
 func (ch *Channel) Push(event string, payload interface{}, timeout time.Duration) (*PhoenixMessage, error) {
 	if !ch.joined {
 		return nil, fmt.Errorf("channel %s not joined", ch.topic)
 	}
-	return ch.client.Push(ch.topic, event, payload, timeout)
+	return ch.client.PushWithJoinRef(ch.topic, ch.joinRef, event, payload, timeout)
 }
 
 // On registers a handler for a specific event.
