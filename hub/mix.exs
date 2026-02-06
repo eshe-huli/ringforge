@@ -5,7 +5,7 @@ defmodule Hub.MixProject do
     [
       app: :hub,
       version: "0.1.0",
-      elixir: "~> 1.14",
+      elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: deps()
     ]
@@ -20,10 +20,11 @@ defmodule Hub.MixProject do
 
   defp deps do
     [
-      {:phoenix, "~> 1.7.0"},
+      {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},
       {:phoenix_html, "~> 4.0"},
-      {:phoenix_live_view, "~> 0.20"},
+      {:phoenix_live_view, "~> 1.0"},
+      {:salad_ui, "~> 0.14"},
       {:jason, "~> 1.4"},
       {:bandit, "~> 1.0"},
       {:libcluster, "~> 3.3"},
