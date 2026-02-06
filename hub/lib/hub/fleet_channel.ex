@@ -31,6 +31,8 @@ defmodule Hub.FleetChannel do
 
   alias Hub.FleetPresence
   alias Hub.Auth
+  alias Hub.DirectMessage
+  alias Hub.EventReplay
 
   @valid_states ~w(online busy away offline)
   @valid_activity_kinds ~w(task_started task_progress task_completed task_failed discovery question alert custom)
@@ -78,6 +80,18 @@ defmodule Hub.FleetChannel do
     # Subscribe to agent-specific direct delivery topic
     Phoenix.PubSub.subscribe(Hub.PubSub, "fleet:#{socket.assigns.fleet_id}:agent:#{socket.assigns.agent_id}")
 
+    # Deliver queued direct messages (async, don't block join)
+    fleet_id = socket.assigns.fleet_id
+    agent_id = socket.assigns.agent_id
+
+    Task.start(fn ->
+      queued = DirectMessage.deliver_queued(fleet_id, agent_id)
+
+      if queued != [] do
+        Logger.info("[FleetChannel] Delivered #{length(queued)} queued message(s) to #{agent_id}")
+      end
+    end)
+
     {:noreply, socket}
   end
 
@@ -92,6 +106,17 @@ defmodule Hub.FleetChannel do
   @impl true
   def handle_info({:direct_activity, msg}, socket) do
     push(socket, "activity:broadcast", msg)
+    {:noreply, socket}
+  end
+
+  # Direct message delivery (from PubSub — another agent sent us a DM)
+  def handle_info({:direct_message, envelope}, socket) do
+    push(socket, "direct:message", %{
+      "type" => "direct",
+      "event" => "message",
+      "payload" => Map.drop(envelope, ["to"])
+    })
+
     {:noreply, socket}
   end
 
@@ -457,6 +482,114 @@ defmodule Hub.FleetChannel do
 
   def handle_in("memory:subscribe", _payload, socket) do
     {:reply, {:error, %{reason: "payload must include \"pattern\""}}, socket}
+  end
+
+  # ── direct:send — send a direct message to another agent ──
+
+  def handle_in("direct:send", %{"payload" => payload}, socket) do
+    to = Map.get(payload, "to")
+    correlation_id = Map.get(payload, "correlation_id")
+    message = Map.get(payload, "message", %{})
+
+    cond do
+      is_nil(to) or to == "" ->
+        {:reply, {:error, %{reason: "\"to\" agent_id is required"}}, socket}
+
+      to == socket.assigns.agent_id ->
+        {:reply, {:error, %{reason: "cannot send a message to yourself"}}, socket}
+
+      true ->
+        case DirectMessage.send_message(
+               socket.assigns.fleet_id,
+               socket.assigns.agent_id,
+               to,
+               message,
+               correlation_id
+             ) do
+          {:ok, result} ->
+            {:reply, {:ok, %{
+              "type" => "direct",
+              "event" => "delivered",
+              "payload" => %{
+                "message_id" => result.message_id,
+                "to" => to,
+                "status" => result.status
+              }
+            }}, socket}
+
+          {:error, reason} ->
+            {:reply, {:ok, %{
+              "type" => "direct",
+              "event" => "delivered",
+              "payload" => %{
+                "message_id" => nil,
+                "to" => to,
+                "status" => "failed",
+                "reason" => reason
+              }
+            }}, socket}
+        end
+    end
+  end
+
+  def handle_in("direct:send", payload, socket) when is_map(payload) do
+    handle_in("direct:send", %{"payload" => payload}, socket)
+  end
+
+  # ── direct:history — conversation history between two agents ─
+
+  def handle_in("direct:history", %{"payload" => payload}, socket) do
+    with_agent = Map.get(payload, "with")
+    limit = Map.get(payload, "limit", 50)
+
+    if is_nil(with_agent) or with_agent == "" do
+      {:reply, {:error, %{reason: "\"with\" agent_id is required"}}, socket}
+    else
+      case DirectMessage.history(
+             socket.assigns.fleet_id,
+             socket.assigns.agent_id,
+             with_agent,
+             limit: limit
+           ) do
+        {:ok, messages} ->
+          {:reply, {:ok, %{
+            "type" => "direct",
+            "event" => "history",
+            "payload" => %{
+              "with" => with_agent,
+              "messages" => messages,
+              "count" => length(messages)
+            }
+          }}, socket}
+
+        {:error, reason} ->
+          {:reply, {:error, %{reason: "history failed: #{inspect(reason)}"}}, socket}
+      end
+    end
+  end
+
+  def handle_in("direct:history", _payload, socket) do
+    {:reply, {:error, %{reason: "payload must include \"with\" agent_id"}}, socket}
+  end
+
+  # ── replay:request — replay filtered activity events ───────
+
+  def handle_in("replay:request", %{"payload" => payload}, socket) do
+    case EventReplay.replay(socket.assigns.fleet_id, payload) do
+      {:ok, result} ->
+        {:reply, {:ok, %{
+          "type" => "replay",
+          "event" => "result",
+          "payload" => result
+        }}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{reason: "replay failed: #{inspect(reason)}"}}, socket}
+    end
+  end
+
+  def handle_in("replay:request", _payload, socket) do
+    handle_in("replay:request", %{"payload" => %{}}, socket)
   end
 
   # ── Terminate — cleanup on disconnect ──────────────────────
