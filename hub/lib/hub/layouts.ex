@@ -87,6 +87,28 @@ defmodule Hub.Layouts do
           }
           .border-glow { animation: borderGlow 2s ease-in-out infinite; }
 
+          /* ── Slide-in panel ──────────────────────── */
+          @keyframes slideInRight {
+            from { opacity: 0; transform: translateX(20px); }
+            to { opacity: 1; transform: translateX(0); }
+          }
+          .slide-in-right { animation: slideInRight 0.25s ease-out; }
+
+          @keyframes slideInLeft {
+            from { opacity: 0; transform: translateX(-20px); }
+            to { opacity: 1; transform: translateX(0); }
+          }
+          .slide-in-left { animation: slideInLeft 0.25s ease-out; }
+
+          /* ── View transition ─────────────────────── */
+          .view-transition {
+            animation: viewFade 0.2s ease-out;
+          }
+          @keyframes viewFade {
+            from { opacity: 0.7; }
+            to { opacity: 1; }
+          }
+
           /* ── Background Grid ─────────────────────── */
           .bg-grid {
             background-image:
@@ -111,7 +133,7 @@ defmodule Hub.Layouts do
           }
 
           /* ── Scrollbar ───────────────────────────── */
-          ::-webkit-scrollbar { width: 5px; }
+          ::-webkit-scrollbar { width: 5px; height: 5px; }
           ::-webkit-scrollbar-track { background: transparent; }
           ::-webkit-scrollbar-thumb { background: #252540; border-radius: 4px; }
           ::-webkit-scrollbar-thumb:hover { background: #3a3a5c; }
@@ -151,15 +173,61 @@ defmodule Hub.Layouts do
 
           /* ── Toast ───────────────────────────────── */
           .toast-enter {
-            animation: fadeIn 0.3s ease-out, fadeOut 0.3s ease-in 3s forwards;
+            animation: toastIn 0.3s ease-out, toastOut 0.3s ease-in 3s forwards;
           }
-          @keyframes fadeOut {
-            to { opacity: 0; transform: translateY(-4px); }
+          @keyframes toastIn {
+            from { opacity: 0; transform: translateY(-8px) scale(0.95); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+          }
+          @keyframes toastOut {
+            to { opacity: 0; transform: translateY(-4px) scale(0.98); }
           }
 
           /* ── Transitions ─────────────────────────── */
           .transition-smooth {
             transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+          }
+
+          /* ── Skeleton loading ────────────────────── */
+          @keyframes skeletonPulse {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 0.7; }
+          }
+          .animate-pulse {
+            animation: skeletonPulse 1.5s ease-in-out infinite;
+          }
+
+          /* ── Table styles ────────────────────────── */
+          table tbody tr {
+            transition: background-color 0.15s ease;
+          }
+
+          /* ── Responsive adjustments ──────────────── */
+          @media (max-width: 1024px) {
+            .grid-cols-4 {
+              grid-template-columns: repeat(2, 1fr);
+            }
+            .grid-cols-\[1fr_380px\] {
+              grid-template-columns: 1fr;
+            }
+          }
+
+          @media (max-width: 768px) {
+            .grid-cols-4 {
+              grid-template-columns: 1fr;
+            }
+          }
+
+          /* ── Selection highlight ─────────────────── */
+          ::selection {
+            background: rgba(245, 158, 11, 0.25);
+            color: #fff;
+          }
+
+          /* ── Keyboard shortcut ───────────────────── */
+          kbd {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
           }
         </style>
       </head>
@@ -174,6 +242,21 @@ defmodule Hub.Layouts do
           })
           liveSocket.connect()
           window.liveSocket = liveSocket
+
+          // Keyboard shortcuts
+          document.addEventListener('keydown', function(e) {
+            // Skip if typing in an input/textarea
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            const views = {'1': 'dashboard', '2': 'agents', '3': 'activity', '4': 'messaging', '5': 'quotas', '6': 'settings'};
+            if (views[e.key]) {
+              liveSocket.main.channel.push('event', {
+                type: 'click',
+                event: 'navigate',
+                value: { view: views[e.key] }
+              });
+            }
+          });
         </script>
       </body>
     </html>
