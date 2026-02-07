@@ -37,9 +37,32 @@ defmodule Hub.FleetChannel do
   @valid_states ~w(online busy away offline)
   @valid_activity_kinds ~w(task_started task_progress task_completed task_failed discovery question alert custom)
 
+  # Idempotency supported on: activity:broadcast, memory:set, direct:send, group:create
+
   # ── Join ────────────────────────────────────────────────────
 
   @impl true
+  def join("fleet:lobby", payload, socket) do
+    # Lobby topic — resolve to the agent's actual fleet from socket assigns.
+    # This allows SDK clients to connect without knowing their fleet_id upfront.
+    fleet_id = socket.assigns.fleet_id
+
+    if not quota_ok?(socket.assigns.tenant_id, :connected_agents) do
+      {:error, %{
+        reason: "quota_exceeded",
+        resource: "connected_agents",
+        message: "Agent connection limit reached for your plan.",
+        fix: "Disconnect idle agents or upgrade your plan. Check usage at /dashboard → Quotas."
+      }}
+    else
+      Hub.Quota.increment(socket.assigns.tenant_id, :connected_agents)
+      # Re-assign the topic so broadcasts go to the real fleet topic
+      socket = assign(socket, :resolved_fleet_topic, "fleet:#{fleet_id}")
+      send(self(), {:after_join, payload})
+      {:ok, %{fleet_id: fleet_id, topic: "fleet:#{fleet_id}"}, socket}
+    end
+  end
+
   def join("fleet:" <> fleet_id, payload, socket) do
     # Verify the socket's fleet_id matches the requested topic
     cond do
@@ -237,84 +260,94 @@ defmodule Hub.FleetChannel do
 
   # ── activity:broadcast — publish activity event ─────────────
 
-  def handle_in("activity:broadcast", %{"payload" => payload}, socket) do
-    kind = Map.get(payload, "kind")
+  def handle_in("activity:broadcast", %{"payload" => payload} = raw, socket) do
+    idem_key = extract_idempotency_key(raw, socket)
 
-    cond do
-      kind not in @valid_activity_kinds ->
-        {:reply, {:error, %{
-          reason: "invalid_activity_kind",
-          message: "Activity kind '#{kind}' is not valid. Must be one of: #{Enum.join(@valid_activity_kinds, ", ")}.",
-          fix: "Set payload.kind to a valid value. Use 'custom' for generic events."
-        }}, socket}
+    case check_idempotency(idem_key, socket) do
+      {:hit, cached_reply, socket} ->
+        {:reply, {:ok, cached_reply}, socket}
 
-      not quota_ok?(socket.assigns.tenant_id, :messages_today) ->
-        {:reply, {:error, %{
-          reason: "quota_exceeded",
-          resource: "messages_today",
-          message: "Daily message quota reached.",
-          fix: "Wait until quota resets or upgrade your plan. Check usage at /dashboard → Quotas."
-        }}, socket}
+      :miss ->
+        kind = Map.get(payload, "kind")
 
-      true ->
-        Hub.Quota.increment(socket.assigns.tenant_id, :messages_today)
-        event_id = "evt_" <> gen_uuid()
-        scope = Map.get(payload, "scope", "fleet")
+        cond do
+          kind not in @valid_activity_kinds ->
+            {:reply, {:error, %{
+              reason: "invalid_activity_kind",
+              message: "Activity kind '#{kind}' is not valid. Must be one of: #{Enum.join(@valid_activity_kinds, ", ")}.",
+              fix: "Set payload.kind to a valid value. Use 'custom' for generic events."
+            }}, socket}
 
-        event = %{
-          "event_id" => event_id,
-          "from" => %{
-            "agent_id" => socket.assigns.agent_id,
-            "name" => get_agent_name(socket)
-          },
-          "kind" => kind,
-          "description" => Map.get(payload, "description", ""),
-          "tags" => Map.get(payload, "tags", []),
-          "data" => Map.get(payload, "data", %{}),
-          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
-        }
+          not quota_ok?(socket.assigns.tenant_id, :messages_today) ->
+            {:reply, {:error, %{
+              reason: "quota_exceeded",
+              resource: "messages_today",
+              message: "Daily message quota reached.",
+              fix: "Wait until quota resets or upgrade your plan. Check usage at /dashboard → Quotas."
+            }}, socket}
 
-        broadcast_msg = %{
-          "type" => "activity",
-          "event" => "broadcast",
-          "payload" => event
-        }
+          true ->
+            Hub.Quota.increment(socket.assigns.tenant_id, :messages_today)
+            event_id = "evt_" <> gen_uuid()
+            scope = Map.get(payload, "scope", "fleet")
 
-        # Scope-based delivery
-        case scope do
-          "fleet" ->
-            broadcast!(socket, "activity:broadcast", broadcast_msg)
+            event = %{
+              "event_id" => event_id,
+              "from" => %{
+                "agent_id" => socket.assigns.agent_id,
+                "name" => get_agent_name(socket)
+              },
+              "kind" => kind,
+              "description" => Map.get(payload, "description", ""),
+              "tags" => Map.get(payload, "tags", []),
+              "data" => Map.get(payload, "data", %{}),
+              "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+            }
 
-          "tagged" ->
-            tags = Map.get(payload, "tags", [])
-            broadcast_to_tagged(socket, tags, broadcast_msg)
+            broadcast_msg = %{
+              "type" => "activity",
+              "event" => "broadcast",
+              "payload" => event
+            }
 
-          "direct" ->
-            to = Map.get(payload, "to")
+            # Scope-based delivery
+            case scope do
+              "fleet" ->
+                broadcast!(socket, "activity:broadcast", broadcast_msg)
 
-            if to do
-              broadcast_to_agent(socket, to, broadcast_msg)
-            else
-              broadcast!(socket, "activity:broadcast", broadcast_msg)
+              "tagged" ->
+                tags = Map.get(payload, "tags", [])
+                broadcast_to_tagged(socket, tags, broadcast_msg)
+
+              "direct" ->
+                to = Map.get(payload, "to")
+
+                if to do
+                  broadcast_to_agent(socket, to, broadcast_msg)
+                else
+                  broadcast!(socket, "activity:broadcast", broadcast_msg)
+                end
+
+              _ ->
+                broadcast!(socket, "activity:broadcast", broadcast_msg)
             end
 
-          _ ->
-            broadcast!(socket, "activity:broadcast", broadcast_msg)
+            # Async publish to EventBus for durability — never block the channel
+            fleet_id = socket.assigns.fleet_id
+            bus_topic = "ringforge.#{fleet_id}.activity"
+
+            Task.start(fn ->
+              case Hub.EventBus.publish(bus_topic, event) do
+                :ok -> :ok
+                {:error, reason} ->
+                  Logger.warning("[FleetChannel] EventBus publish failed: #{inspect(reason)}")
+              end
+            end)
+
+            reply = %{event_id: event_id}
+            store_idempotency(idem_key, reply)
+            {:reply, {:ok, reply}, socket}
         end
-
-        # Async publish to EventBus for durability — never block the channel
-        fleet_id = socket.assigns.fleet_id
-        bus_topic = "ringforge.#{fleet_id}.activity"
-
-        Task.start(fn ->
-          case Hub.EventBus.publish(bus_topic, event) do
-            :ok -> :ok
-            {:error, reason} ->
-              Logger.warning("[FleetChannel] EventBus publish failed: #{inspect(reason)}")
-          end
-        end)
-
-        {:reply, {:ok, %{event_id: event_id}}, socket}
     end
   end
 
@@ -393,32 +426,42 @@ defmodule Hub.FleetChannel do
 
   # ── memory:set — create/update a memory entry ───────────────
 
-  def handle_in("memory:set", %{"payload" => payload}, socket) do
-    key = Map.get(payload, "key")
+  def handle_in("memory:set", %{"payload" => payload} = raw, socket) do
+    idem_key = extract_idempotency_key(raw, socket)
 
-    cond do
-      is_nil(key) or key == "" ->
-        {:reply, {:error, %{
-          reason: "missing_key",
-          message: "Memory entries require a 'key' field.",
-          fix: "Add payload.key = 'my/key/path' — use forward slashes for namespacing."
-        }}, socket}
+    case check_idempotency(idem_key, socket) do
+      {:hit, cached_reply, socket} ->
+        {:reply, {:ok, cached_reply}, socket}
 
-      not quota_ok?(socket.assigns.tenant_id, :memory_entries) ->
-        {:reply, {:error, %{
-          reason: "quota_exceeded",
-          resource: "memory_entries",
-          message: "Memory entry quota reached.",
-          fix: "Delete unused entries with memory:delete or upgrade your plan."
-        }}, socket}
+      :miss ->
+        key = Map.get(payload, "key")
 
-      true ->
-        Hub.Quota.increment(socket.assigns.tenant_id, :memory_entries)
-        params = Map.put(payload, "author", socket.assigns.agent_id)
+        cond do
+          is_nil(key) or key == "" ->
+            {:reply, {:error, %{
+              reason: "missing_key",
+              message: "Memory entries require a 'key' field.",
+              fix: "Add payload.key = 'my/key/path' — use forward slashes for namespacing."
+            }}, socket}
 
-        case Hub.Memory.set(socket.assigns.fleet_id, key, params) do
-          {:ok, entry} ->
-            {:reply, {:ok, %{id: entry["id"], key: entry["key"], version: 1}}, socket}
+          not quota_ok?(socket.assigns.tenant_id, :memory_entries) ->
+            {:reply, {:error, %{
+              reason: "quota_exceeded",
+              resource: "memory_entries",
+              message: "Memory entry quota reached.",
+              fix: "Delete unused entries with memory:delete or upgrade your plan."
+            }}, socket}
+
+          true ->
+            Hub.Quota.increment(socket.assigns.tenant_id, :memory_entries)
+            params = Map.put(payload, "author", socket.assigns.agent_id)
+
+            case Hub.Memory.set(socket.assigns.fleet_id, key, params) do
+              {:ok, entry} ->
+                reply = %{id: entry["id"], key: entry["key"], version: 1}
+                store_idempotency(idem_key, reply)
+                {:reply, {:ok, reply}, socket}
+            end
         end
     end
   end
@@ -543,65 +586,75 @@ defmodule Hub.FleetChannel do
 
   # ── direct:send — send a direct message to another agent ──
 
-  def handle_in("direct:send", %{"payload" => payload}, socket) do
-    to = Map.get(payload, "to")
-    correlation_id = Map.get(payload, "correlation_id")
-    message = Map.get(payload, "message", %{})
+  def handle_in("direct:send", %{"payload" => payload} = raw, socket) do
+    idem_key = extract_idempotency_key(raw, socket)
 
-    cond do
-      is_nil(to) or to == "" ->
-        {:reply, {:error, %{
-          reason: "missing_recipient",
-          message: "Direct message requires a 'to' field with the target agent_id.",
-          fix: "Add payload.to = 'ag_...' with the recipient's agent ID. Use presence:roster to find agent IDs."
-        }}, socket}
+    case check_idempotency(idem_key, socket) do
+      {:hit, cached_reply, socket} ->
+        {:reply, {:ok, cached_reply}, socket}
 
-      to == socket.assigns.agent_id ->
-        {:reply, {:error, %{
-          reason: "self_message",
-          message: "Cannot send a direct message to yourself.",
-          fix: "Use a different agent_id in the 'to' field."
-        }}, socket}
+      :miss ->
+        to = Map.get(payload, "to")
+        correlation_id = Map.get(payload, "correlation_id")
+        message = Map.get(payload, "message", %{})
 
-      not quota_ok?(socket.assigns.tenant_id, :messages_today) ->
-        {:reply, {:error, %{
-          reason: "quota_exceeded",
-          resource: "messages_today",
-          message: "Daily message quota reached.",
-          fix: "Wait until quota resets or upgrade your plan."
-        }}, socket}
-
-      true ->
-        Hub.Quota.increment(socket.assigns.tenant_id, :messages_today)
-        case DirectMessage.send_message(
-               socket.assigns.fleet_id,
-               socket.assigns.agent_id,
-               to,
-               message,
-               correlation_id
-             ) do
-          {:ok, result} ->
-            {:reply, {:ok, %{
-              "type" => "direct",
-              "event" => "delivered",
-              "payload" => %{
-                "message_id" => result.message_id,
-                "to" => to,
-                "status" => result.status
-              }
+        cond do
+          is_nil(to) or to == "" ->
+            {:reply, {:error, %{
+              reason: "missing_recipient",
+              message: "Direct message requires a 'to' field with the target agent_id.",
+              fix: "Add payload.to = 'ag_...' with the recipient's agent ID. Use presence:roster to find agent IDs."
             }}, socket}
 
-          {:error, reason} ->
-            {:reply, {:ok, %{
-              "type" => "direct",
-              "event" => "delivered",
-              "payload" => %{
-                "message_id" => nil,
-                "to" => to,
-                "status" => "failed",
-                "reason" => reason
-              }
+          to == socket.assigns.agent_id ->
+            {:reply, {:error, %{
+              reason: "self_message",
+              message: "Cannot send a direct message to yourself.",
+              fix: "Use a different agent_id in the 'to' field."
             }}, socket}
+
+          not quota_ok?(socket.assigns.tenant_id, :messages_today) ->
+            {:reply, {:error, %{
+              reason: "quota_exceeded",
+              resource: "messages_today",
+              message: "Daily message quota reached.",
+              fix: "Wait until quota resets or upgrade your plan."
+            }}, socket}
+
+          true ->
+            Hub.Quota.increment(socket.assigns.tenant_id, :messages_today)
+            case DirectMessage.send_message(
+                   socket.assigns.fleet_id,
+                   socket.assigns.agent_id,
+                   to,
+                   message,
+                   correlation_id
+                 ) do
+              {:ok, result} ->
+                reply = %{
+                  "type" => "direct",
+                  "event" => "delivered",
+                  "payload" => %{
+                    "message_id" => result.message_id,
+                    "to" => to,
+                    "status" => result.status
+                  }
+                }
+                store_idempotency(idem_key, reply)
+                {:reply, {:ok, reply}, socket}
+
+              {:error, reason} ->
+                {:reply, {:ok, %{
+                  "type" => "direct",
+                  "event" => "delivered",
+                  "payload" => %{
+                    "message_id" => nil,
+                    "to" => to,
+                    "status" => "failed",
+                    "reason" => reason
+                  }
+                }}, socket}
+            end
         end
     end
   end
@@ -668,45 +721,55 @@ defmodule Hub.FleetChannel do
 
   # ── Groups ──────────────────────────────────────────────────
 
-  def handle_in("group:create", %{"payload" => payload}, socket) do
-    attrs = %{
-      name: payload["name"],
-      type: payload["type"] || "squad",
-      fleet_id: socket.assigns.fleet_id,
-      created_by: socket.assigns.agent_id,
-      capabilities: payload["capabilities"] || [],
-      settings: payload["settings"] || %{}
-    }
+  def handle_in("group:create", %{"payload" => payload} = raw, socket) do
+    idem_key = extract_idempotency_key(raw, socket)
 
-    case Hub.Groups.create_group(attrs) do
-      {:ok, group} ->
-        # Creator auto-joins as owner
-        Hub.Groups.join_group(group.group_id, socket.assigns.agent_id, "owner")
+    case check_idempotency(idem_key, socket) do
+      {:hit, cached_reply, socket} ->
+        {:reply, {:ok, cached_reply}, socket}
 
-        # Subscribe creator to group PubSub topic
-        Phoenix.PubSub.subscribe(Hub.PubSub, group_topic(socket, group.group_id))
+      :miss ->
+        attrs = %{
+          name: payload["name"],
+          type: payload["type"] || "squad",
+          fleet_id: socket.assigns.fleet_id,
+          created_by: socket.assigns.agent_id,
+          capabilities: payload["capabilities"] || [],
+          settings: payload["settings"] || %{}
+        }
 
-        # Auto-invite listed agents
-        for agent_id <- payload["invite"] || [] do
-          Hub.Groups.join_group(group.group_id, agent_id, "member")
-          # Notify invited agents
-          Phoenix.PubSub.broadcast(
-            Hub.PubSub,
-            "fleet:#{socket.assigns.fleet_id}:agent:#{agent_id}",
-            {:group_invite, %{group_id: group.group_id, name: group.name, type: group.type, invited_by: socket.assigns.agent_id}}
-          )
+        case Hub.Groups.create_group(attrs) do
+          {:ok, group} ->
+            # Creator auto-joins as owner
+            Hub.Groups.join_group(group.group_id, socket.assigns.agent_id, "owner")
+
+            # Subscribe creator to group PubSub topic
+            Phoenix.PubSub.subscribe(Hub.PubSub, group_topic(socket, group.group_id))
+
+            # Auto-invite listed agents
+            for agent_id <- payload["invite"] || [] do
+              Hub.Groups.join_group(group.group_id, agent_id, "member")
+              # Notify invited agents
+              Phoenix.PubSub.broadcast(
+                Hub.PubSub,
+                "fleet:#{socket.assigns.fleet_id}:agent:#{agent_id}",
+                {:group_invite, %{group_id: group.group_id, name: group.name, type: group.type, invited_by: socket.assigns.agent_id}}
+              )
+            end
+
+            # Broadcast to fleet
+            broadcast!(socket, "group:created", %{
+              "type" => "group", "event" => "created",
+              "payload" => group_json(group)
+            })
+
+            reply = group_json(group)
+            store_idempotency(idem_key, reply)
+            {:reply, {:ok, reply}, socket}
+
+          {:error, changeset} ->
+            {:reply, {:error, %{message: "Failed to create group", details: inspect(changeset.errors)}}, socket}
         end
-
-        # Broadcast to fleet
-        broadcast!(socket, "group:created", %{
-          "type" => "group", "event" => "created",
-          "payload" => group_json(group)
-        })
-
-        {:reply, {:ok, group_json(group)}, socket}
-
-      {:error, changeset} ->
-        {:reply, {:error, %{message: "Failed to create group", details: inspect(changeset.errors)}}, socket}
     end
   end
 
@@ -1082,6 +1145,34 @@ defmodule Hub.FleetChannel do
       true ->
         pattern == key
     end
+  end
+
+  # ── Idempotency Helpers ──────────────────────────────────
+
+  # Extract the idempotency key from a payload, scoped to this fleet+agent.
+  defp extract_idempotency_key(payload, socket) do
+    case get_in(payload, ["payload", "_idempotency_key"]) || Map.get(payload, "_idempotency_key") do
+      nil -> nil
+      "" -> nil
+      raw_key ->
+        # Scope the key to fleet+agent to prevent cross-tenant collisions
+        "#{socket.assigns.fleet_id}:#{socket.assigns.agent_id}:#{raw_key}"
+    end
+  end
+
+  # Check idempotency cache. Returns {:hit, reply, socket} or :miss.
+  defp check_idempotency(nil, _socket), do: :miss
+  defp check_idempotency(key, socket) do
+    case Hub.Quota.idempotency_check(key) do
+      {:hit, cached_reply} -> {:hit, cached_reply, socket}
+      :miss -> :miss
+    end
+  end
+
+  # Store a successful reply in the idempotency cache.
+  defp store_idempotency(nil, _reply), do: :ok
+  defp store_idempotency(key, reply) do
+    Hub.Quota.idempotency_store(key, reply)
   end
 
   # ── Quota Helpers ──────────────────────────────────────────

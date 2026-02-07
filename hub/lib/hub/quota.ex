@@ -20,6 +20,9 @@ defmodule Hub.Quota do
   alias Hub.Auth.Tenant
 
   @table :hub_quotas
+  @idempotency_table :hub_idempotency
+  @idempotency_ttl_ms 300_000  # 5 minutes
+  @idempotency_cleanup_ms 300_000  # 5 minutes
 
   @plan_limits %{
     "free" => %{
@@ -181,6 +184,42 @@ defmodule Hub.Quota do
   @spec plan_limits() :: map()
   def plan_limits, do: @plan_limits
 
+  # ── Idempotency API ───────────────────────────────────────
+
+  @doc """
+  Check the idempotency cache for a previously-seen key.
+
+  Returns `{:hit, cached_response}` if the key exists and hasn't expired,
+  or `:miss` if no entry is found.
+  """
+  @spec idempotency_check(String.t()) :: {:hit, term()} | :miss
+  def idempotency_check(key) when is_binary(key) do
+    now = System.monotonic_time(:millisecond)
+
+    case :ets.lookup(@idempotency_table, key) do
+      [{^key, response, expires_at}] when expires_at > now ->
+        {:hit, response}
+
+      [{^key, _response, _expires_at}] ->
+        # Expired — delete lazily
+        :ets.delete(@idempotency_table, key)
+        :miss
+
+      [] ->
+        :miss
+    end
+  end
+
+  @doc """
+  Store a response in the idempotency cache with a 5-minute TTL.
+  """
+  @spec idempotency_store(String.t(), term()) :: :ok
+  def idempotency_store(key, response) when is_binary(key) do
+    expires_at = System.monotonic_time(:millisecond) + @idempotency_ttl_ms
+    :ets.insert(@idempotency_table, {key, response, expires_at})
+    :ok
+  end
+
   # ── GenServer Callbacks ────────────────────────────────────
 
   @impl true
@@ -192,11 +231,18 @@ defmodule Hub.Quota do
     Hub.Plugs.RateLimit.init_table()
     Logger.info("[Hub.Quota] ETS table :hub_rate_limits created")
 
+    # Create idempotency cache table
+    :ets.new(@idempotency_table, [:named_table, :public, :set, read_concurrency: true])
+    Logger.info("[Hub.Quota] ETS table :hub_idempotency created")
+
     # Load all tenants and initialize their quotas
     load_all_tenants()
 
     # Schedule daily reset at midnight UTC
     schedule_daily_reset()
+
+    # Schedule periodic idempotency cache cleanup
+    schedule_idempotency_cleanup()
 
     {:ok, %{table: table}}
   end
@@ -213,6 +259,29 @@ defmodule Hub.Quota do
         set_plan_limits(tenant_id, "free")
         {:reply, :ok, state}
     end
+  end
+
+  @impl true
+  def handle_info(:cleanup_idempotency, state) do
+    now = System.monotonic_time(:millisecond)
+    expired_keys =
+      :ets.foldl(
+        fn
+          {key, _response, expires_at}, acc when expires_at <= now -> [key | acc]
+          _, acc -> acc
+        end,
+        [],
+        @idempotency_table
+      )
+
+    Enum.each(expired_keys, &:ets.delete(@idempotency_table, &1))
+
+    if expired_keys != [] do
+      Logger.debug("[Hub.Quota] Cleaned #{length(expired_keys)} expired idempotency entries")
+    end
+
+    schedule_idempotency_cleanup()
+    {:noreply, state}
   end
 
   @impl true
@@ -261,6 +330,10 @@ defmodule Hub.Quota do
     midnight = DateTime.new!(tomorrow, ~T[00:00:00], "Etc/UTC")
     ms_until = DateTime.diff(midnight, now, :millisecond)
     Process.send_after(self(), :daily_reset, ms_until)
+  end
+
+  defp schedule_idempotency_cleanup do
+    Process.send_after(self(), :cleanup_idempotency, @idempotency_cleanup_ms)
   end
 
   defp maybe_warn(tenant_id, resource, count, limit) when is_integer(limit) and limit > 0 do
