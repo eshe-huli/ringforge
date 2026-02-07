@@ -26,16 +26,22 @@ defmodule Hub.Quota do
 
   @plan_limits %{
     "free" => %{
-      messages_today: 10_000,
-      memory_entries: 1_000,
-      connected_agents: 5,
+      messages_today: 50_000,
+      memory_entries: 5_000,
+      connected_agents: 10,
       fleets: 1
     },
-    "team" => %{
+    "pro" => %{
       messages_today: 500_000,
       memory_entries: 100_000,
-      connected_agents: 50,
-      fleets: 10
+      connected_agents: 100,
+      fleets: 5
+    },
+    "scale" => %{
+      messages_today: 5_000_000,
+      memory_entries: 1_000_000,
+      connected_agents: 1_000,
+      fleets: 25
     },
     "enterprise" => %{
       messages_today: :unlimited,

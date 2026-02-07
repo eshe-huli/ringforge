@@ -7,6 +7,11 @@ defmodule Hub.Router do
     plug :accepts, ["json"]
   end
 
+  pipeline :stripe_webhook do
+    plug :accepts, ["json"]
+    plug Hub.Plugs.RawBodyReader
+  end
+
   pipeline :admin_auth do
     plug Hub.Plugs.AdminAuth
     plug Hub.Plugs.RateLimit
@@ -22,6 +27,19 @@ defmodule Hub.Router do
     plug :put_root_layout, html: {Hub.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+  end
+
+  # Stripe webhook (no CSRF, no auth — signature verified in controller)
+  scope "/webhooks", Hub do
+    pipe_through :stripe_webhook
+    post "/stripe", WebhookController, :stripe
+  end
+
+  # Billing (session auth)
+  scope "/billing", Hub do
+    pipe_through :browser
+    post "/checkout", BillingController, :checkout
+    get "/portal", BillingController, :portal
   end
 
   scope "/api", Hub do

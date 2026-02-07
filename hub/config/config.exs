@@ -46,6 +46,20 @@ config :hub,
   store_data_dir: System.get_env("RINGFORGE_DATA_DIR", "./data/store")
 
 # EventBus — Local (ETS) for dev, Kafka for production
+# Stripe billing
+config :stripity_stripe,
+  api_key: System.get_env("STRIPE_SECRET_KEY")
+
+config :hub, :stripe,
+  webhook_secret: System.get_env("STRIPE_WEBHOOK_SECRET"),
+  price_ids: %{
+    "pro" => System.get_env("STRIPE_PRICE_PRO", "price_pro_placeholder"),
+    "scale" => System.get_env("STRIPE_PRICE_SCALE", "price_scale_placeholder"),
+    "enterprise" => System.get_env("STRIPE_PRICE_ENTERPRISE", "price_enterprise_placeholder")
+  },
+  success_url: System.get_env("STRIPE_SUCCESS_URL", "http://localhost:4000/dashboard?billing=success"),
+  cancel_url: System.get_env("STRIPE_CANCEL_URL", "http://localhost:4000/dashboard?billing=canceled")
+
 config :hub, event_bus: Hub.EventBus.Local
 
 config :hub, Hub.EventBus.Kafka,

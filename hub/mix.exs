@@ -36,7 +36,8 @@ defmodule Hub.MixProject do
       {:ecto_sql, "~> 3.11"},
       {:postgrex, "~> 0.19.0"},
       {:brod, "~> 3.16"},
-      {:bcrypt_elixir, "~> 3.0"}
+      {:bcrypt_elixir, "~> 3.0"},
+      {:stripity_stripe, "~> 3.2"}
     ]
   end
 end

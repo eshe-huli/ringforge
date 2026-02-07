@@ -16,6 +16,7 @@ defmodule Hub.Auth.Tenant do
     field :plan, :string, default: "free"
     field :email, :string
     field :password_hash, :string
+    field :stripe_customer_id, :string
 
     # Virtual field — never persisted
     field :password, :string, virtual: true
@@ -23,6 +24,7 @@ defmodule Hub.Auth.Tenant do
     has_many :fleets, Hub.Auth.Fleet
     has_many :api_keys, Hub.Auth.ApiKey
     has_many :agents, Hub.Auth.Agent
+    has_one :subscription, Hub.Billing.Subscription
 
     timestamps()
   end
