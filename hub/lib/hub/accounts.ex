@@ -23,19 +23,34 @@ defmodule Hub.Accounts do
   Returns `{:ok, %{tenant, fleet, admin_key}}` or `{:error, changeset}`.
   """
   def register(attrs) do
-    Repo.transaction(fn ->
-      changeset = Tenant.registration_changeset(%Tenant{}, attrs)
+    result =
+      Repo.transaction(fn ->
+        changeset = Tenant.registration_changeset(%Tenant{}, attrs)
 
-      case Repo.insert(changeset) do
-        {:ok, tenant} ->
-          {:ok, fleet} = create_default_fleet(tenant.id)
-          {:ok, raw_key, _api_key} = Hub.Auth.generate_api_key("admin", tenant.id, fleet.id)
-          %{tenant: tenant, fleet: fleet, admin_key: raw_key}
+        case Repo.insert(changeset) do
+          {:ok, tenant} ->
+            {:ok, fleet} = create_default_fleet(tenant.id)
+            {:ok, raw_key, _api_key} = Hub.Auth.generate_api_key("admin", tenant.id, fleet.id)
+            %{tenant: tenant, fleet: fleet, admin_key: raw_key}
 
-        {:error, changeset} ->
-          Repo.rollback(changeset)
-      end
-    end)
+          {:error, changeset} ->
+            Repo.rollback(changeset)
+        end
+      end)
+
+    case result do
+      {:ok, %{tenant: tenant}} = ok ->
+        Hub.Audit.log("tenant.registered", {"tenant", tenant.id}, {"tenant", tenant.id}, %{
+          tenant_id: tenant.id,
+          email: tenant.email,
+          method: "email"
+        })
+
+        ok
+
+      error ->
+        error
+    end
   end
 
   @doc """
@@ -46,9 +61,11 @@ defmodule Hub.Accounts do
     tenant = Repo.one(from t in Tenant, where: t.email == ^email)
 
     if tenant && Tenant.valid_password?(tenant, password) do
+      Hub.Audit.log("tenant.login", {"tenant", tenant.id}, nil, %{tenant_id: tenant.id, method: "email"})
       {:ok, tenant}
     else
       Bcrypt.no_user_verify()
+      Hub.Audit.log("tenant.login_failed", {"unknown", email}, nil, %{method: "email"})
       {:error, :invalid_credentials}
     end
   end

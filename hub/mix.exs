@@ -44,7 +44,10 @@ defmodule Hub.MixProject do
       {:hackney, "~> 1.20"},
       {:ueberauth, "~> 0.10"},
       {:ueberauth_github, "~> 0.8"},
-      {:ueberauth_google, "~> 0.12"}
+      {:ueberauth_google, "~> 0.12"},
+      {:redix, "~> 1.4"},
+      {:tortoise311, "~> 0.12"},
+      {:mix_audit, "~> 2.1", only: :dev, runtime: false}
     ]
   end
 end

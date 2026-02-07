@@ -73,6 +73,11 @@ defmodule Hub.KeyController do
 
         case key |> ApiKey.changeset(%{revoked_at: now}) |> Repo.update() do
           {:ok, _} ->
+            Hub.Audit.log("api_key.revoked", {"tenant", tenant_id}, {"api_key", id}, %{
+              tenant_id: tenant_id,
+              key_prefix: key.key_prefix
+            })
+
             json(conn, %{revoked: true, id: id})
 
           {:error, _} ->

@@ -3,15 +3,16 @@ defmodule Hub.TaskRouter do
   Capability-based task routing for the Ringforge fleet.
 
   Matches task requirements to online agents' declared capabilities.
-  Considers agent state (prefer online over busy, never assign to away/offline)
-  and load balancing (prefer lower load).
+  Considers agent state (prefer online over busy, never assign to away/offline),
+  load balancing (prefer lower load), and region affinity (prefer same-region
+  agents for lower latency).
 
   ## Routing Algorithm
 
   1. Get all tracked agents from FleetPresence for the fleet
   2. Filter by capabilities (agent must have ALL required capabilities)
   3. Filter by state (only "online", or "busy" with load < 0.8)
-  4. Sort by: state priority (online first), then load (lowest first)
+  4. Sort by: state priority, region affinity, then load (lowest first)
   5. Return `{:ok, best_agent_id}` or `{:error, :no_capable_agent}`
   """
 
@@ -34,7 +35,11 @@ defmodule Hub.TaskRouter do
         capabilities_match?(meta, required) and state_eligible?(meta)
       end)
       |> Enum.sort_by(fn {_agent_id, meta} ->
-        {state_priority(meta[:state]), meta[:load] || 0.0}
+        {
+          state_priority(meta[:state]),
+          region_score(meta),
+          meta[:load] || 0.0
+        }
       end)
 
     case candidates do
@@ -71,4 +76,11 @@ defmodule Hub.TaskRouter do
   defp state_priority("online"), do: 0
   defp state_priority("busy"), do: 1
   defp state_priority(_), do: 99
+
+  # Region affinity: same-region agents get a lower (better) score.
+  # Returns 0.0 for same region, 1.0 for different region.
+  defp region_score(meta) do
+    agent_region = meta[:region] || meta[:node_region] || "local"
+    Hub.Region.affinity_score(agent_region) + 0.5
+  end
 end

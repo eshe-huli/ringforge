@@ -1503,6 +1503,113 @@ defmodule Hub.FleetChannel do
     }}, socket}
   end
 
+  # ── Device Handlers (IoT/Domotic) ────────────────────────
+
+  def handle_in("device:register", %{"payload" => payload}, socket) do
+    attrs = %{
+      name: payload["name"],
+      device_type: payload["device_type"] || "sensor",
+      protocol: payload["protocol"] || "mqtt",
+      topic: payload["topic"],
+      metadata: payload["metadata"] || %{}
+    }
+
+    case Hub.Devices.register_device(
+           socket.assigns.tenant_id,
+           socket.assigns.fleet_id,
+           attrs
+         ) do
+      {:ok, device} ->
+        broadcast!(socket, "device:registered", %{
+          "type" => "device",
+          "event" => "registered",
+          "payload" => %{
+            "device_id" => device.id,
+            "name" => device.name,
+            "device_type" => device.device_type,
+            "protocol" => device.protocol,
+            "topic" => device.topic
+          }
+        })
+
+        {:reply, {:ok, %{device_id: device.id, name: device.name}}, socket}
+
+      {:error, changeset} ->
+        {:reply, {:error, %{reason: "registration_failed", details: inspect(changeset.errors)}}, socket}
+    end
+  end
+
+  def handle_in("device:register", payload, socket) when is_map(payload) do
+    handle_in("device:register", %{"payload" => payload}, socket)
+  end
+
+  def handle_in("device:reading", %{"payload" => payload}, socket) do
+    device_id = payload["device_id"]
+    value = payload["value"]
+
+    if is_nil(device_id) do
+      {:reply, {:error, %{reason: "missing_device_id"}}, socket}
+    else
+      case Hub.Devices.update_reading(device_id, value, socket.assigns.fleet_id) do
+        {:ok, _device} ->
+          {:reply, {:ok, %{status: "updated"}}, socket}
+
+        {:error, reason} ->
+          {:reply, {:error, %{reason: inspect(reason)}}, socket}
+      end
+    end
+  end
+
+  def handle_in("device:reading", payload, socket) when is_map(payload) do
+    handle_in("device:reading", %{"payload" => payload}, socket)
+  end
+
+  def handle_in("device:command", %{"payload" => payload}, socket) do
+    device_id = payload["device_id"]
+    command = payload["command"]
+
+    if is_nil(device_id) or is_nil(command) do
+      {:reply, {:error, %{reason: "missing device_id or command"}}, socket}
+    else
+      case Hub.Devices.send_command(device_id, command) do
+        {:ok, status} ->
+          {:reply, {:ok, %{status: to_string(status)}}, socket}
+
+        {:error, reason} ->
+          {:reply, {:error, %{reason: inspect(reason)}}, socket}
+      end
+    end
+  end
+
+  def handle_in("device:command", payload, socket) when is_map(payload) do
+    handle_in("device:command", %{"payload" => payload}, socket)
+  end
+
+  def handle_in("device:list", _payload, socket) do
+    devices = Hub.Devices.list_devices(socket.assigns.fleet_id)
+
+    device_list =
+      Enum.map(devices, fn d ->
+        %{
+          "device_id" => d.id,
+          "name" => d.name,
+          "device_type" => d.device_type,
+          "protocol" => d.protocol,
+          "topic" => d.topic,
+          "online" => d.online,
+          "last_value" => d.last_value,
+          "last_seen_at" =>
+            if(d.last_seen_at, do: DateTime.to_iso8601(d.last_seen_at))
+        }
+      end)
+
+    {:reply, {:ok, %{
+      "type" => "device",
+      "event" => "list",
+      "payload" => %{"devices" => device_list, "count" => length(device_list)}
+    }}, socket}
+  end
+
   # ── Terminate — cleanup on disconnect ──────────────────────
 
   @impl true
@@ -1607,7 +1714,11 @@ defmodule Hub.FleetChannel do
       task: Map.get(join_payload, "task"),
       load: Map.get(join_payload, "load", 0.0),
       metadata: Map.get(join_payload, "metadata", %{}),
-      connected_at: DateTime.utc_now() |> DateTime.to_iso8601()
+      connected_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+      # Node-aware presence: track which BEAM node this agent is connected to
+      node: Hub.NodeInfo.node_name_string(),
+      region: Hub.NodeInfo.region(),
+      node_region: Hub.NodeInfo.region()
     }
   end
 
@@ -1689,7 +1800,9 @@ defmodule Hub.FleetChannel do
       "state" => meta[:state] || meta["state"],
       "task" => meta[:task] || meta["task"],
       "load" => meta[:load] || meta["load"] || 0.0,
-      "connected_at" => meta[:connected_at] || meta["connected_at"]
+      "connected_at" => meta[:connected_at] || meta["connected_at"],
+      "node" => meta[:node] || meta["node"],
+      "region" => meta[:region] || meta["region"]
     }
   end
 

@@ -39,5 +39,6 @@ defmodule Hub.Endpoint do
     length: 1_000_000
 
   plug Plug.Head
+  plug Hub.Plugs.SecurityHeaders
   plug Hub.Router
 end

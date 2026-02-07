@@ -21,6 +21,10 @@ defmodule Hub.Router do
     plug :accepts, ["text", "html"]
   end
 
+  pipeline :auth_rate_limited do
+    plug Hub.Plugs.RateLimiter, scope: :auth
+  end
+
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
@@ -47,6 +51,12 @@ defmodule Hub.Router do
     get "/health", HealthController, :index
     get "/connect/check", ConnectController, :check
     post "/auth/challenge", ChallengeController, :create
+  end
+
+  # Cluster health — admin-only
+  scope "/api/cluster", Hub do
+    pipe_through [:api, :admin_auth]
+    get "/health", ClusterController, :health
   end
 
   scope "/api/v1", Hub do
@@ -90,7 +100,7 @@ defmodule Hub.Router do
   end
 
   scope "/auth", Hub do
-    pipe_through :browser
+    pipe_through [:browser, :auth_rate_limited]
     post "/register", SessionController, :register
     post "/login", SessionController, :login
     post "/api-key", SessionController, :api_key_login
@@ -113,5 +123,7 @@ defmodule Hub.Router do
     live "/webhooks", WebhooksLive
     live "/invites", InvitesLive
     live "/provisioning", ProvisioningLive
+    live "/devices", DevicesLive
+    live "/audit", AuditLive
   end
 end

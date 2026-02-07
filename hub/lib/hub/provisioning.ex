@@ -112,6 +112,14 @@ defmodule Hub.Provisioning do
 
         case %ProvisionedAgent{} |> ProvisionedAgent.changeset(params) |> Repo.insert() do
           {:ok, agent} ->
+            Hub.Audit.log("agent.provisioned", {"tenant", tenant_id}, {"provisioned_agent", agent.id}, %{
+              tenant_id: tenant_id,
+              fleet_id: fleet_id,
+              provider: credential.provider,
+              region: agent.region,
+              name: agent.name
+            })
+
             # Dispatch async provisioning
             Hub.ProvisioningWorker.provision(agent)
             {:ok, agent}
@@ -131,6 +139,12 @@ defmodule Hub.Provisioning do
         if agent.status == "destroyed" do
           {:error, :already_destroyed}
         else
+          Hub.Audit.log("agent.destroyed", {"tenant", tenant_id}, {"provisioned_agent", agent.id}, %{
+            tenant_id: tenant_id,
+            provider: agent.provider,
+            name: agent.name
+          })
+
           Hub.ProvisioningWorker.destroy(agent)
           {:ok, agent}
         end

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-hub-config
+  labels:
+    app: ringforge-hub
+    release: {{ .Release.Name }}
+data:
+  CLUSTER_STRATEGY: {{ .Values.env.CLUSTER_STRATEGY | default "none" | quote }}
+  CLUSTER_DNS_QUERY: {{ .Values.env.CLUSTER_DNS_QUERY | default "ringforge-hub-headless.default.svc.cluster.local" | quote }}
+  CLUSTER_NODE_BASENAME: {{ .Values.env.CLUSTER_NODE_BASENAME | default "hub" | quote }}
+  HUB_REGION: {{ .Values.env.HUB_REGION | default "default" | quote }}
+  TASK_STORE: {{ .Values.env.TASK_STORE | default "ets" | quote }}
+  PORT: {{ .Values.env.PORT | default "4000" | quote }}
+  MIX_ENV: {{ .Values.env.MIX_ENV | default "prod" | quote }}
+  RELEASE_DISTRIBUTION: {{ .Values.env.RELEASE_DISTRIBUTION | default "name" | quote }}

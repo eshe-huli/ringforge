@@ -1,0 +1,102 @@
+# Default values for ringforge-hub
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/ringforge/hub
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+
+service:
+  type: ClusterIP
+  port: 4000
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Environment variables
+env:
+  # Cluster settings
+  CLUSTER_STRATEGY: "dns"
+  CLUSTER_DNS_QUERY: "ringforge-hub-headless.default.svc.cluster.local"
+  CLUSTER_NODE_BASENAME: "hub"
+  HUB_REGION: "default"
+
+  # Task store
+  TASK_STORE: "redis"
+
+  # Application
+  PORT: "4000"
+  MIX_ENV: "prod"
+
+  # BEAM distribution
+  RELEASE_DISTRIBUTION: "name"
+  RELEASE_COOKIE: ""  # Set via secret
+
+# Secrets (referenced from Kubernetes Secret)
+secrets:
+  secretName: ringforge-hub-secrets
+  keys:
+    - SECRET_KEY_BASE
+    - DATABASE_URL
+    - REDIS_URL
+    - RELEASE_COOKIE
+    - STRIPE_SECRET_KEY
+    - STRIPE_WEBHOOK_SECRET
+    - S3_ACCESS_KEY
+    - S3_SECRET_KEY
+    - GITHUB_CLIENT_ID
+    - GITHUB_CLIENT_SECRET
+    - GOOGLE_CLIENT_ID
+    - GOOGLE_CLIENT_SECRET
+
+# Pod configuration
+podAnnotations: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# BEAM EPMD port for node discovery
+epmdPort: 4369
+
+# Distribution port range
+distributionPorts:
+  min: 9100
+  max: 9200
+
+# Liveness and readiness probes
+livenessProbe:
+  httpGet:
+    path: /api/health
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  timeoutSeconds: 5
+
+readinessProbe:
+  httpGet:
+    path: /api/health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+
+# Graceful shutdown
+terminationGracePeriodSeconds: 35

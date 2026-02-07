@@ -32,9 +32,18 @@ defmodule Hub.Invites do
       expires_at: expires_at
     }
 
-    %InviteCode{}
-    |> InviteCode.changeset(attrs)
-    |> Repo.insert()
+    case %InviteCode{} |> InviteCode.changeset(attrs) |> Repo.insert() do
+      {:ok, invite} ->
+        Hub.Audit.log("invite.created", {"tenant", tenant_id}, {"invite", invite.code}, %{
+          tenant_id: tenant_id,
+          max_uses: max_uses
+        })
+
+        {:ok, invite}
+
+      error ->
+        error
+    end
   end
 
   @doc """
@@ -64,7 +73,13 @@ defmodule Hub.Invites do
           |> Repo.update_all(inc: [uses: 1])
 
         if count > 0 do
-          {:ok, Repo.get!(InviteCode, invite.id)}
+          used_invite = Repo.get!(InviteCode, invite.id)
+
+          Hub.Audit.log("invite.used", {"system", "system"}, {"invite", invite.code}, %{
+            tenant_id: invite.created_by
+          })
+
+          {:ok, used_invite}
         else
           {:error, :invite_code_exhausted}
         end

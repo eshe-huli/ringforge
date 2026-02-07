@@ -36,8 +36,17 @@ defmodule Hub.Auth do
     }
 
     case %ApiKey{} |> ApiKey.changeset(attrs) |> Repo.insert() do
-      {:ok, api_key} -> {:ok, raw_key, api_key}
-      {:error, changeset} -> {:error, changeset}
+      {:ok, api_key} ->
+        Hub.Audit.log("api_key.created", {"tenant", tenant_id}, {"api_key", api_key.id}, %{
+          tenant_id: tenant_id,
+          type: type,
+          key_prefix: key_prefix
+        })
+
+        {:ok, raw_key, api_key}
+
+      {:error, changeset} ->
+        {:error, changeset}
     end
   end
 
@@ -94,47 +103,62 @@ defmodule Hub.Auth do
         last_seen_at: DateTime.utc_now() |> DateTime.truncate(:second)
       })
 
-    if name && name != "" do
-      # Named agent: find existing or insert new, atomic
-      case Repo.one(from a in Agent, where: a.name == ^name and a.fleet_id == ^fleet_id, limit: 1) do
-        %Agent{} = existing ->
-          update_attrs = %{
-            framework: Map.get(agent_params, :framework) || existing.framework,
-            capabilities: Map.get(agent_params, :capabilities) || existing.capabilities,
-            last_seen_at: DateTime.utc_now() |> DateTime.truncate(:second),
-            total_connections: (existing.total_connections || 0) + 1
-          }
+    result =
+      if name && name != "" do
+        # Named agent: find existing or insert new, atomic
+        case Repo.one(from a in Agent, where: a.name == ^name and a.fleet_id == ^fleet_id, limit: 1) do
+          %Agent{} = existing ->
+            update_attrs = %{
+              framework: Map.get(agent_params, :framework) || existing.framework,
+              capabilities: Map.get(agent_params, :capabilities) || existing.capabilities,
+              last_seen_at: DateTime.utc_now() |> DateTime.truncate(:second),
+              total_connections: (existing.total_connections || 0) + 1
+            }
 
-          # Bind or update public key if provided
-          update_attrs =
-            case Map.get(agent_params, :public_key) do
-              pk when is_binary(pk) and byte_size(pk) == 32 -> Map.put(update_attrs, :public_key, pk)
-              _ -> update_attrs
-            end
-
-          existing
-          |> Agent.changeset(update_attrs)
-          |> Repo.update()
-
-        nil ->
-          attrs = Map.put(attrs, :total_connections, 1)
-
-          case %Agent{} |> Agent.changeset(attrs) |> Repo.insert() do
-            {:ok, agent} ->
-              {:ok, agent}
-
-            {:error, %Ecto.Changeset{errors: _}} ->
-              # Race condition: another connection inserted first. Retry find.
-              case Repo.one(from a in Agent, where: a.name == ^name and a.fleet_id == ^fleet_id, limit: 1) do
-                %Agent{} = agent -> {:ok, agent}
-                nil -> {:error, :registration_failed}
+            # Bind or update public key if provided
+            update_attrs =
+              case Map.get(agent_params, :public_key) do
+                pk when is_binary(pk) and byte_size(pk) == 32 -> Map.put(update_attrs, :public_key, pk)
+                _ -> update_attrs
               end
-          end
+
+            existing
+            |> Agent.changeset(update_attrs)
+            |> Repo.update()
+
+          nil ->
+            attrs = Map.put(attrs, :total_connections, 1)
+
+            case %Agent{} |> Agent.changeset(attrs) |> Repo.insert() do
+              {:ok, agent} ->
+                {:ok, agent}
+
+              {:error, %Ecto.Changeset{errors: _}} ->
+                # Race condition: another connection inserted first. Retry find.
+                case Repo.one(from a in Agent, where: a.name == ^name and a.fleet_id == ^fleet_id, limit: 1) do
+                  %Agent{} = agent -> {:ok, agent}
+                  nil -> {:error, :registration_failed}
+                end
+            end
+        end
+      else
+        # Unnamed agent: always create new
+        attrs = Map.put(attrs, :total_connections, 1)
+        %Agent{} |> Agent.changeset(attrs) |> Repo.insert()
       end
-    else
-      # Unnamed agent: always create new
-      attrs = Map.put(attrs, :total_connections, 1)
-      %Agent{} |> Agent.changeset(attrs) |> Repo.insert()
+
+    case result do
+      {:ok, agent} ->
+        Hub.Audit.log("agent.registered", {"api_key", api_key.id}, {"agent", agent.agent_id}, %{
+          tenant_id: api_key.tenant_id,
+          fleet_id: fleet_id,
+          name: agent.name
+        })
+
+        {:ok, agent}
+
+      error ->
+        error
     end
   end
 

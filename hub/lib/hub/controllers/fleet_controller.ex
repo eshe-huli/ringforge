@@ -40,6 +40,11 @@ defmodule Hub.FleetController do
 
           case %Fleet{} |> Fleet.changeset(attrs) |> Repo.insert() do
             {:ok, fleet} ->
+              Hub.Audit.log("fleet.created", {"tenant", tenant_id}, {"fleet", fleet.id}, %{
+                tenant_id: tenant_id,
+                name: name
+              })
+
               conn |> put_status(201) |> json(fleet_json(fleet))
 
             {:error, changeset} ->
@@ -98,6 +103,11 @@ defmodule Hub.FleetController do
           case Repo.delete(fleet) do
             {:ok, _} ->
               Hub.Quota.decrement(tenant_id, :fleets)
+
+              Hub.Audit.log("fleet.deleted", {"tenant", tenant_id}, {"fleet", id}, %{
+                tenant_id: tenant_id
+              })
+
               conn |> put_status(200) |> json(%{deleted: true, id: id})
 
             {:error, _} ->

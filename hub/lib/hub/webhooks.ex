@@ -40,9 +40,20 @@ defmodule Hub.Webhooks do
       else
         secret = generate_secret()
 
-        %Webhook{}
-        |> Webhook.changeset(Map.merge(attrs, %{tenant_id: tenant.id, secret: secret}))
-        |> Repo.insert()
+        case %Webhook{}
+             |> Webhook.changeset(Map.merge(attrs, %{tenant_id: tenant.id, secret: secret}))
+             |> Repo.insert() do
+          {:ok, webhook} ->
+            Hub.Audit.log("webhook.created", {"tenant", tenant.id}, {"webhook", webhook.id}, %{
+              tenant_id: tenant.id,
+              url: webhook.url
+            })
+
+            {:ok, webhook}
+
+          error ->
+            error
+        end
       end
     end
   end
@@ -96,7 +107,19 @@ defmodule Hub.Webhooks do
         {:error, :not_found}
 
       webhook ->
-        Repo.delete(webhook)
+        result = Repo.delete(webhook)
+
+        case result do
+          {:ok, _} ->
+            Hub.Audit.log("webhook.deleted", {"tenant", tenant.id}, {"webhook", webhook_id}, %{
+              tenant_id: tenant.id
+            })
+
+          _ ->
+            :ok
+        end
+
+        result
     end
   end
 

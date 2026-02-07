@@ -368,6 +368,7 @@ defmodule Hub.Billing do
 
   defp sync_tenant_plan(%Tenant{} = tenant, plan, status) do
     effective = if status in ~w(active trialing), do: plan, else: "free"
+    old_plan = tenant.plan || "free"
 
     # Update tenant plan field
     tenant
@@ -376,6 +377,16 @@ defmodule Hub.Billing do
 
     # Update quota limits
     Quota.set_plan_limits(tenant.id, effective)
+
+    # Audit the plan change
+    if old_plan != effective do
+      Hub.Audit.log("billing.plan_changed", {"system", "stripe"}, {"tenant", tenant.id}, %{
+        tenant_id: tenant.id,
+        old_plan: old_plan,
+        new_plan: effective,
+        status: status
+      })
+    end
 
     Logger.info("[Hub.Billing] Tenant #{tenant.id} plan synced to '#{effective}'")
   end

@@ -9,18 +9,16 @@ config :hub, Hub.Endpoint,
   secret_key_base: System.get_env("SECRET_KEY_BASE", :crypto.strong_rand_bytes(64) |> Base.encode64()),
   live_view: [signing_salt: "ringforge_lv_salt"]
 
-config :hub,
-  cluster_topology: [
-    hub: [
-      strategy: Cluster.Strategy.Gossip,
-      config: [
-        port: 45892,
-        if_addr: "127.0.0.1",
-        multicast_addr: "230.1.1.251",
-        multicast_ttl: 1
-      ]
-    ]
-  ]
+# Cluster — defaults to standalone (no clustering).
+# Override via CLUSTER_STRATEGY env var: none, gossip, dns, epmd
+config :hub, Hub.Cluster,
+  strategy: "none",
+  region: "local"
+
+# Task store — defaults to ETS (single-node).
+# Override via TASK_STORE env var: ets, redis
+config :hub, Hub.TaskStore,
+  adapter: Hub.TaskStore.ETS
 
 config :logger, :console,
   format: "$time $metadata[$level] $message\n",
@@ -143,6 +141,7 @@ config :hub,
     System.get_env("EVENT_BUS_ADAPTER", "local")
     |> then(fn
       "kafka" -> Hub.EventBus.Kafka
+      "pulsar" -> Hub.EventBus.Pulsar
       _ -> Hub.EventBus.Local
     end)
 
@@ -155,3 +154,19 @@ config :hub, Hub.WebhookDispatcher,
 config :hub, Hub.EventBus.Kafka,
   brokers: [{"localhost", String.to_integer(System.get_env("KAFKA_PORT", "9094"))}],
   client_id: :ringforge_kafka
+
+# MQTT Bridge (IoT/Domotic — disabled by default)
+config :hub, Hub.MQTT.Bridge,
+  enabled: System.get_env("MQTT_ENABLED", "false") == "true",
+  broker: System.get_env("MQTT_BROKER", "mqtt://localhost:1883"),
+  client_id: System.get_env("MQTT_CLIENT_ID", "ringforge-hub"),
+  topics: System.get_env("MQTT_TOPICS", "home/#,sensors/#") |> String.split(","),
+  username: System.get_env("MQTT_USERNAME"),
+  password: System.get_env("MQTT_PASSWORD")
+
+# Pulsar EventBus
+config :hub, Hub.EventBus.Pulsar,
+  service_url: System.get_env("PULSAR_URL", "pulsar://localhost:6650"),
+  web_service_url: System.get_env("PULSAR_WEB_URL", "http://localhost:8080"),
+  tenant: "ringforge",
+  namespace: "default"

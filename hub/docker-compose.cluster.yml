@@ -1,0 +1,123 @@
+# docker-compose.cluster.yml — Local 3-node cluster for testing
+#
+# Usage:
+#   docker compose -f docker-compose.cluster.yml up --build
+#
+# This starts 3 Hub nodes + Postgres + Redis, connected via epmd.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: sentinel_secret
+      POSTGRES_DB: ringforge_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinel"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  hub1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - RELEASE_DISTRIBUTION=name
+      - RELEASE_NODE=hub@hub1
+      - RELEASE_COOKIE=ringforge_cluster_dev
+      - NODE_NAME=hub@hub1
+      - CLUSTER_STRATEGY=epmd
+      - CLUSTER_EPMD_HOSTS=hub@hub1,hub@hub2,hub@hub3
+      - HUB_REGION=local-1
+      - DATABASE_URL=ecto://sentinel:sentinel_secret@postgres:5432/ringforge_dev
+      - REDIS_URL=redis://redis:6379
+      - TASK_STORE=redis
+      - SECRET_KEY_BASE=dev_secret_key_base_that_is_at_least_64_bytes_long_for_hub_cluster_testing_only
+      - PORT=4000
+    ports:
+      - "4001:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      default:
+        aliases:
+          - hub1
+
+  hub2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - RELEASE_DISTRIBUTION=name
+      - RELEASE_NODE=hub@hub2
+      - RELEASE_COOKIE=ringforge_cluster_dev
+      - NODE_NAME=hub@hub2
+      - CLUSTER_STRATEGY=epmd
+      - CLUSTER_EPMD_HOSTS=hub@hub1,hub@hub2,hub@hub3
+      - HUB_REGION=local-2
+      - DATABASE_URL=ecto://sentinel:sentinel_secret@postgres:5432/ringforge_dev
+      - REDIS_URL=redis://redis:6379
+      - TASK_STORE=redis
+      - SECRET_KEY_BASE=dev_secret_key_base_that_is_at_least_64_bytes_long_for_hub_cluster_testing_only
+      - PORT=4000
+    ports:
+      - "4002:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      default:
+        aliases:
+          - hub2
+
+  hub3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - RELEASE_DISTRIBUTION=name
+      - RELEASE_NODE=hub@hub3
+      - RELEASE_COOKIE=ringforge_cluster_dev
+      - NODE_NAME=hub@hub3
+      - CLUSTER_STRATEGY=epmd
+      - CLUSTER_EPMD_HOSTS=hub@hub1,hub@hub2,hub@hub3
+      - HUB_REGION=local-3
+      - DATABASE_URL=ecto://sentinel:sentinel_secret@postgres:5432/ringforge_dev
+      - REDIS_URL=redis://redis:6379
+      - TASK_STORE=redis
+      - SECRET_KEY_BASE=dev_secret_key_base_that_is_at_least_64_bytes_long_for_hub_cluster_testing_only
+      - PORT=4000
+    ports:
+      - "4003:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      default:
+        aliases:
+          - hub3
+
+volumes:
+  pgdata:

@@ -1,0 +1,14 @@
+apiVersion: v2
+name: ringforge-hub
+description: RingForge Hub — AI agent mesh coordination server
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - ringforge
+  - ai
+  - agents
+  - elixir
+  - phoenix
+maintainers:
+  - name: RingForge
