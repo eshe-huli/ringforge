@@ -1,7 +1,7 @@
 # RingForge — Product Requirements Document
 
 > **Version:** 1.0.0-draft
-> **Author:** Argus (AI Assistant) — commissioned by Ben (CTO)
+> **Author:** Ben Ouattara (CTO)
 > **Date:** 2026-02-06
 > **Status:** Draft — Awaiting Review
 > **Repository:** https://github.com/eshe-huli/ringforge
@@ -2818,7 +2818,7 @@ Complete request/response cycles as they appear on the wire:
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
-| 1.0.0-draft | 2026-02-06 | Argus | Initial PRD |
+| 1.0.0-draft | 2026-02-06 | Ben Ouattara | Initial PRD |
 
 ---
 

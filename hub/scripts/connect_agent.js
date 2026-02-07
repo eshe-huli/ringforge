@@ -5,10 +5,10 @@
  * Connects to a RingForge hub as an agent via Phoenix Channels WebSocket.
  * 
  * Usage:
- *   node connect_agent.js --url wss://ringforge.wejoona.com --key rf_live_XXX --name "Argus Key"
+ *   node connect_agent.js --url wss://your-server.com --key rf_live_XXX --name "My Agent"
  *   
  * Or with env vars:
- *   RINGFORGE_URL=wss://ringforge.wejoona.com RINGFORGE_KEY=rf_live_XXX node connect_agent.js
+ *   RINGFORGE_URL=wss://your-server.com RINGFORGE_KEY=rf_live_XXX node connect_agent.js
  * 
  * Requires: npm install ws (or use Bun/Deno which have built-in WebSocket)
  */
@@ -17,7 +17,7 @@ const WebSocket = require("ws");
 
 // ── Config ──────────────────────────────────────────────────
 const config = {
-  url: process.env.RINGFORGE_URL || process.argv.find((a, i) => process.argv[i - 1] === "--url") || "wss://ringforge.wejoona.com",
+  url: process.env.RINGFORGE_URL || process.argv.find((a, i) => process.argv[i - 1] === "--url") || "ws://localhost:4000",
   apiKey: process.env.RINGFORGE_KEY || process.argv.find((a, i) => process.argv[i - 1] === "--key") || "",
   name: process.env.RINGFORGE_NAME || process.argv.find((a, i) => process.argv[i - 1] === "--name") || "agent-" + Math.random().toString(36).slice(2, 8),
   framework: process.env.RINGFORGE_FRAMEWORK || process.argv.find((a, i) => process.argv[i - 1] === "--framework") || "openclaw",
@@ -175,11 +175,11 @@ function connect() {
         return;
       case 1008:
         console.error("❌ Disconnected: policy violation. Your API key may be invalid or revoked.");
-        console.error("   Fix: Check your key with: curl https://ringforge.wejoona.com/api/connect/check?api_key=YOUR_KEY");
+        console.error("   Fix: Check your key with: curl https://your-server.com/api/connect/check?api_key=YOUR_KEY");
         break;
       case 1011:
         console.error("❌ Disconnected: server error. The hub may be restarting or misconfigured.");
-        console.error("   Fix: Check hub health: curl https://ringforge.wejoona.com/api/health");
+        console.error("   Fix: Check hub health: curl https://your-server.com/api/health");
         break;
       case 1006:
         console.error("❌ Disconnected: connection lost (no close frame).");
@@ -198,10 +198,10 @@ function connect() {
       console.error("❌ Server returned 500. Possible causes:");
       console.error("   • Missing vsn=2.0.0 in WebSocket URL (protocol mismatch)");
       console.error("   • Hub is starting up — wait a few seconds");
-      console.error("   • Check: curl https://ringforge.wejoona.com/api/health");
+      console.error("   • Check: curl https://your-server.com/api/health");
     } else if (err.message.includes("401") || err.message.includes("403")) {
       console.error("❌ Authentication failed (${err.message}).");
-      console.error("   Fix: Verify your API key: curl https://ringforge.wejoona.com/api/connect/check?api_key=YOUR_KEY");
+      console.error("   Fix: Verify your API key: curl https://your-server.com/api/connect/check?api_key=YOUR_KEY");
     } else if (err.message.includes("ECONNREFUSED") || err.message.includes("ENOTFOUND")) {
       console.error("❌ Cannot reach server:", err.message);
       console.error("   Fix: Check the URL is correct and the hub is running.");

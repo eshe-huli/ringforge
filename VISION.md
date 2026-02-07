@@ -8,7 +8,7 @@ Ringforge is not a sync engine or a CRDT library. It's the **operating system fo
 
 ## The Problem
 
-Today, AI agents are isolated. Each runs in its own session, can't see other agents, can't coordinate, can't share work. Managing 2 agents (Argus + Onyx) already requires manual relay hacks. Managing 10, 50, 200 agents? Impossible without infrastructure.
+Today, AI agents are isolated. Each runs in its own session, can't see other agents, can't coordinate, can't share work. Managing a handful of agents already requires manual relay hacks. Managing 10, 50, 200 agents? Impossible without infrastructure.
 
 ## The Product
 
@@ -29,7 +29,7 @@ Today, AI agents are isolated. Each runs in its own session, can't see other age
 4. **Pods (Agent Groups)** — Logical groupings of agents:
    - `backend-team`: 3 coding agents + 1 review agent
    - `research-pod`: 2 web researchers + 1 synthesizer
-   - `ops-team`: Onyx (infra) + monitoring agent
+   - `ops-team`: infra agent + monitoring agent
    - Pods have shared context, shared task queues, and a coordination channel
 
 5. **Task Assignment & Coordination** — Assign a task to a pod. Agents within the pod:
