@@ -99,62 +99,35 @@ defmodule Hub.Live.DashboardLive do
   @impl true
   def handle_params(_params, _uri, socket), do: {:noreply, socket}
 
-  @impl true
-  def handle_event("authenticate", %{"key" => key}, socket) do
-    case validate_admin_key(key) do
-      {:ok, tenant_id, fleet_id, fleet_name, plan, tenant_email} ->
-        registered = load_registered_agents(tenant_id)
-        socket = assign(socket,
-          tenant_id: tenant_id, fleet_id: fleet_id, fleet_name: fleet_name, plan: plan,
-          tenant_email: tenant_email,
-          agents: load_agents(fleet_id),
-          activities: load_recent_activities(fleet_id),
-          usage: load_usage(tenant_id),
-          registered_agents: registered,
-          current_view: "dashboard", sidebar_collapsed: false,
-          selected_agent: nil, agent_detail_open: false, agent_activities: [],
-          msg_to: nil, msg_body: "", messages: [],
-          filter: "all", search_query: "", sort_by: :name, sort_dir: :asc,
-          toast: nil, cmd_open: false, cmd_query: "",
-          new_api_key: nil, new_api_key_type: nil, editing_fleet_name: false,
-          show_all_agents: false,
-          authenticated: true, auth_error: nil
-        )
-
-        if connected?(socket) do
-          Hub.Events.subscribe()
-          Phoenix.PubSub.subscribe(Hub.PubSub, "fleet:#{fleet_id}")
-          Process.send_after(self(), :refresh_quota, 1_000)
-        end
-
-        {:noreply, push_event(socket, "store_session", %{tenant_id: tenant_id})}
-
-      {:error, _} ->
-        {:noreply, assign(socket, auth_error: "Invalid admin API key")}
-    end
-  end
-
   # Auth tab switching
+  @impl true
   def handle_event("switch_auth_tab", %{"tab" => tab}, socket) do
     {:noreply, assign(socket, auth_tab: tab, auth_error: nil)}
   end
 
   # Claim account — set email/password on existing tenant
-  def handle_event("claim_account", %{"email" => email, "password" => password}, socket) do
-    tenant = Hub.Repo.get(Hub.Auth.Tenant, socket.assigns.tenant_id)
+  def handle_event("claim_account", %{"admin_key" => key, "email" => email, "password" => password}, socket) do
+    # Verify admin key belongs to this tenant before allowing claim
+    case Hub.Auth.validate_api_key(key) do
+      {:ok, %{type: "admin", tenant_id: tenant_id}} when tenant_id == socket.assigns.tenant_id ->
+        tenant = Hub.Repo.get(Hub.Auth.Tenant, tenant_id)
 
-    case Hub.Auth.Tenant.registration_changeset(tenant, %{name: tenant.name, email: email, password: password})
-         |> Hub.Repo.update() do
-      {:ok, updated} ->
-        {:noreply, assign(socket,
-          tenant_email: updated.email,
-          toast: {:success, "Account claimed — you can now sign in with #{email}"}
-        )}
+        case Hub.Auth.Tenant.registration_changeset(tenant, %{name: tenant.name, email: email, password: password})
+             |> Hub.Repo.update() do
+          {:ok, updated} ->
+            {:noreply, assign(socket,
+              tenant_email: updated.email,
+              toast: {:success, "Account claimed — you can now sign in with #{email}"}
+            )}
 
-      {:error, changeset} ->
-        error = Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
-                |> Enum.map_join(". ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
-        {:noreply, assign(socket, toast: {:error, error})}
+          {:error, changeset} ->
+            error = Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
+                    |> Enum.map_join(". ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
+            {:noreply, assign(socket, toast: {:error, error})}
+        end
+
+      _ ->
+        {:noreply, assign(socket, toast: {:error, "Invalid admin API key"})}
     end
   end
 
@@ -696,7 +669,8 @@ defmodule Hub.Live.DashboardLive do
 
             <%!-- API Key tab --%>
             <%= if @auth_tab == "apikey" do %>
-              <form phx-submit="authenticate" class="space-y-4 animate-fade-in">
+              <form action="/auth/api-key" method="post" class="space-y-4 animate-fade-in">
+                <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
                 <div>
                   <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Admin API Key</label>
                   <.input
@@ -716,7 +690,7 @@ defmodule Hub.Live.DashboardLive do
                   Authenticate
                 </.button>
                 <p class="text-xs text-zinc-600 text-center">
-                  Use your admin key for direct access
+                  Key is submitted securely — never stored in URL
                 </p>
               </form>
             <% end %>
@@ -1488,6 +1462,18 @@ defmodule Hub.Live.DashboardLive do
             <.card_content>
               <form phx-submit="claim_account" class="space-y-3">
                 <div>
+                  <label class="text-[11px] text-zinc-400 mb-1 block font-medium">Confirm Admin API Key</label>
+                  <.input
+                    type="password"
+                    name="admin_key"
+                    placeholder="rf_admin_..."
+                    autocomplete="off"
+                    required
+                    class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50 h-9 text-xs"
+                  />
+                  <p class="text-[10px] text-zinc-600 mt-1">Required to verify ownership</p>
+                </div>
+                <div>
                   <label class="text-[11px] text-zinc-400 mb-1 block font-medium">Email</label>
                   <.input
                     type="email"
@@ -1639,29 +1625,17 @@ defmodule Hub.Live.DashboardLive do
   # Authentication
   # ══════════════════════════════════════════════════════════
 
-  defp authenticate(params, session) do
-    cond do
-      key = params["key"] -> validate_admin_key(key)
-      tenant_id = session["tenant_id"] ->
+  defp authenticate(_params, session) do
+    # Only session-based auth — no API key in URL params (security: prevents key leaking in
+    # browser history, server logs, referrer headers). Use the API Key tab form instead.
+    case session["tenant_id"] do
+      nil -> {:error, :unauthenticated}
+      tenant_id ->
         fleet = load_default_fleet(tenant_id)
         tenant = Hub.Repo.get(Hub.Auth.Tenant, tenant_id)
         plan = if(tenant, do: tenant.plan || "free", else: "free")
         email = if(tenant, do: tenant.email, else: nil)
         if fleet, do: {:ok, tenant_id, fleet.id, fleet.name, plan, email}, else: {:error, :unauthenticated}
-      true -> {:error, :unauthenticated}
-    end
-  end
-
-  defp validate_admin_key(raw_key) do
-    case Hub.Auth.validate_api_key(raw_key) do
-      {:ok, %{type: "admin", tenant_id: tenant_id}} ->
-        fleet = load_default_fleet(tenant_id)
-        tenant = Hub.Repo.get(Hub.Auth.Tenant, tenant_id)
-        plan = if(tenant, do: tenant.plan || "free", else: "free")
-        email = if(tenant, do: tenant.email, else: nil)
-        if fleet, do: {:ok, tenant_id, fleet.id, fleet.name, plan, email}, else: {:error, :no_fleet}
-      {:ok, _} -> {:error, :not_admin}
-      {:error, reason} -> {:error, reason}
     end
   end
 

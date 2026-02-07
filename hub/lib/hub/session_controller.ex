@@ -37,6 +37,21 @@ defmodule Hub.SessionController do
     end
   end
 
+  def api_key_login(conn, %{"key" => key}) do
+    case Hub.Auth.validate_api_key(key) do
+      {:ok, %{type: "admin", tenant_id: tenant_id}} ->
+        conn
+        |> put_session(:tenant_id, tenant_id)
+        |> redirect(to: "/dashboard")
+
+      {:ok, _} ->
+        conn |> redirect(to: "/dashboard?error=#{URI.encode("Admin API key required")}&tab=apikey")
+
+      {:error, _} ->
+        conn |> redirect(to: "/dashboard?error=#{URI.encode("Invalid API key")}&tab=apikey")
+    end
+  end
+
   def logout(conn, _params) do
     conn
     |> clear_session()

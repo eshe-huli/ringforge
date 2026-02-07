@@ -52,6 +52,7 @@ defmodule Hub.Router do
     pipe_through :browser
     post "/register", SessionController, :register
     post "/login", SessionController, :login
+    post "/api-key", SessionController, :api_key_login
     get "/logout", SessionController, :logout
   end
 
