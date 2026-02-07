@@ -151,17 +151,11 @@ function connect() {
     } else if (event === "direct:message") {
       const p = payload?.payload || payload;
       const fromName = p.from?.name || p.from?.agent_id || "unknown";
-      const text = p.message?.text || JSON.stringify(p.message);
-      console.log(`💬 DM from ${fromName}: ${text}`);
-
-      // Auto-respond to ping
-      if (text.toLowerCase().startsWith("ping") && p.from?.agent_id && currentFleetTopic) {
-        const pongMsg = `pong — ${config.name} here, alive and well 🟢`;
-        pushChannel(currentFleetTopic, "direct:send", {
-          payload: { to: p.from.agent_id, message: { text: pongMsg } }
-        });
-        console.log(`→ Auto-pong sent to ${fromName}`);
-      }
+      const fromId = p.from?.agent_id;
+      const msg = p.message || {};
+      
+      // Handle structured messages by type
+      handleIncomingDM(fromName, fromId, msg);
     } else if (event === "system:quota_warning") {
       console.log("⚠️  Quota warning:", JSON.stringify(payload));
     } else if (topic === "phoenix" && event === "phx_reply") {
@@ -246,15 +240,23 @@ function joinFleet(fleetId) {
 }
 
 function onJoined(topic, response) {
-  console.log("🚀 Connected to mesh! Interactive commands:");
-  console.log("   Type in terminal:");
-  console.log("   busy <task>     — set state to busy with task");
-  console.log("   online          — set state to online");
-  console.log("   away            — set state to away");
-  console.log("   activity <desc> — broadcast an activity");
-  console.log("   dm <agent> <msg>— send direct message");
-  console.log("   roster          — request roster");
-  console.log("   quit            — disconnect");
+  console.log("🚀 Connected to mesh! Commands:");
+  console.log("  ── Presence ──");
+  console.log("  busy <task>                — set busy with task");
+  console.log("  online / away              — change state");
+  console.log("  roster                     — list agents");
+  console.log("  ── Messaging ──");
+  console.log("  dm <agent> <text>          — text DM");
+  console.log("  ask <agent> <question>     — structured query");
+  console.log("  assign <agent> <task> [desc] — delegate task");
+  console.log("  status <agent>             — request agent status");
+  console.log("  data <agent> <label> <json> — send data payload");
+  console.log("  send <agent> <json>        — raw structured message");
+  console.log("  ── Fleet ──");
+  console.log("  activity <desc>            — broadcast activity");
+  console.log("  task <desc> / done <desc>  — task lifecycle");
+  console.log("  memory set|get|list <key>  — shared memory");
+  console.log("  quit                       — disconnect");
   console.log("");
 
   // Read stdin for interactive commands
@@ -325,16 +327,96 @@ function onJoined(topic, response) {
 
       case "dm":
         const toAgent = args[0];
-        const msg = args.slice(1).join(" ");
-        if (!toAgent || !msg) {
+        const dmText = args.slice(1).join(" ");
+        if (!toAgent || !dmText) {
           console.log("Usage: dm <agent_id> <message>");
         } else {
-          pushChannel(topic, "direct:send", {
-            payload: { to: toAgent, message: { text: msg } }
-          });
+          reply(toAgent, { type: "text", text: dmText });
           console.log(`→ DM sent to ${toAgent}`);
         }
         break;
+
+      case "ask": {
+        // ask <agent_id> <question>
+        const askTo = args[0];
+        const question = args.slice(1).join(" ");
+        if (!askTo || !question) {
+          console.log("Usage: ask <agent_id> <question>");
+        } else {
+          reply(askTo, { type: "query", ref: makeRef(), question });
+          console.log(`→ Query sent to ${askTo}`);
+        }
+        break;
+      }
+
+      case "assign": {
+        // assign <agent_id> <task_name> [description...]
+        const assignTo = args[0];
+        const taskName = args[1];
+        const taskDesc = args.slice(2).join(" ") || taskName;
+        if (!assignTo || !taskName) {
+          console.log("Usage: assign <agent_id> <task_name> [description]");
+        } else {
+          reply(assignTo, {
+            type: "task_request",
+            ref: makeRef(),
+            task: taskName,
+            description: taskDesc,
+            priority: "normal",
+            payload: { assigned_by: config.name, assigned_at: new Date().toISOString() },
+          });
+          console.log(`→ Task '${taskName}' assigned to ${assignTo}`);
+        }
+        break;
+      }
+
+      case "send": {
+        // send <agent_id> <json_payload>
+        const sendTo = args[0];
+        const jsonStr = args.slice(1).join(" ");
+        if (!sendTo || !jsonStr) {
+          console.log("Usage: send <agent_id> <json>");
+        } else {
+          try {
+            const parsed = JSON.parse(jsonStr);
+            reply(sendTo, parsed);
+            console.log(`→ Structured message sent to ${sendTo}`);
+          } catch (e) {
+            console.log(`❌ Invalid JSON: ${e.message}`);
+          }
+        }
+        break;
+      }
+
+      case "status": {
+        // status <agent_id>  — request agent status
+        const statusTo = args[0];
+        if (!statusTo) {
+          console.log("Usage: status <agent_id>");
+        } else {
+          reply(statusTo, { type: "status_request" });
+          console.log(`→ Status request sent to ${statusTo}`);
+        }
+        break;
+      }
+
+      case "data": {
+        // data <agent_id> <label> <json_payload>
+        const dataTo = args[0];
+        const label = args[1];
+        const dataJson = args.slice(2).join(" ");
+        if (!dataTo || !label || !dataJson) {
+          console.log("Usage: data <agent_id> <label> <json>");
+        } else {
+          try {
+            reply(dataTo, { type: "data", label, format: "json", payload: JSON.parse(dataJson) });
+            console.log(`→ Data '${label}' sent to ${dataTo}`);
+          } catch (e) {
+            console.log(`❌ Invalid JSON: ${e.message}`);
+          }
+        }
+        break;
+      }
 
       case "roster":
         pushChannel(topic, "presence:roster", {});
@@ -362,12 +444,141 @@ function onJoined(topic, response) {
         process.exit(0);
 
       default:
-        console.log(`Unknown command: ${cmd}. Try: busy, online, away, activity, task, done, dm, roster, memory, quit`);
+        console.log(`Unknown command: ${cmd}. Try: dm, ask, assign, status, data, send, roster, busy, activity, memory, quit`);
     }
 
     rl.prompt();
   });
 }
+
+// ── Structured Message Handler ──────────────────────────────
+
+function handleIncomingDM(fromName, fromId, msg) {
+  const type = msg.type || "text";
+
+  switch (type) {
+    case "text":
+      console.log(`💬 DM from ${fromName}: ${msg.text || JSON.stringify(msg)}`);
+      // Auto-respond to ping
+      if ((msg.text || "").toLowerCase().startsWith("ping") && fromId && currentFleetTopic) {
+        reply(fromId, { type: "text", text: `pong — ${config.name} here, alive and well 🟢` });
+        console.log(`→ Auto-pong sent to ${fromName}`);
+      }
+      break;
+
+    case "task_request":
+      console.log(`📋 Task from ${fromName}: [${msg.task}] ${msg.description || ""}`);
+      console.log(`   ref: ${msg.ref || "none"} | priority: ${msg.priority || "normal"} | deadline: ${msg.deadline || "none"}`);
+      if (msg.payload) console.log(`   payload: ${JSON.stringify(msg.payload).slice(0, 200)}`);
+      // Auto-acknowledge task
+      if (fromId && currentFleetTopic) {
+        reply(fromId, {
+          type: "task_ack",
+          ref: msg.ref,
+          status: "accepted",
+          agent: config.name,
+          estimated_ms: 5000,
+        });
+        console.log(`→ Task acknowledged to ${fromName}`);
+        // Simulate work then respond with result
+        setTimeout(() => {
+          reply(fromId, {
+            type: "task_result",
+            ref: msg.ref,
+            status: "completed",
+            agent: config.name,
+            result: { summary: `${config.name} completed task: ${msg.task}`, data: msg.payload },
+          });
+          console.log(`→ Task result sent to ${fromName}`);
+        }, 2000);
+      }
+      break;
+
+    case "task_ack":
+      console.log(`✅ Task ACK from ${fromName}: ref=${msg.ref} status=${msg.status} est=${msg.estimated_ms}ms`);
+      break;
+
+    case "task_result":
+      console.log(`📦 Task Result from ${fromName}: ref=${msg.ref} status=${msg.status}`);
+      console.log(`   result: ${JSON.stringify(msg.result).slice(0, 300)}`);
+      break;
+
+    case "query":
+      console.log(`❓ Query from ${fromName}: ${msg.question}`);
+      if (msg.context) console.log(`   context: ${JSON.stringify(msg.context).slice(0, 200)}`);
+      // Auto-respond with capabilities
+      if (fromId && currentFleetTopic) {
+        reply(fromId, {
+          type: "query_response",
+          ref: msg.ref,
+          agent: config.name,
+          answer: `I'm ${config.name} with capabilities: ${config.capabilities.join(", ")}. Ask me anything in those domains.`,
+          confidence: 0.9,
+        });
+      }
+      break;
+
+    case "query_response":
+      console.log(`💡 Answer from ${fromName}: ${msg.answer}`);
+      if (msg.confidence) console.log(`   confidence: ${(msg.confidence * 100).toFixed(0)}%`);
+      break;
+
+    case "data":
+      console.log(`📊 Data from ${fromName}: format=${msg.format || "json"} size=${JSON.stringify(msg.payload).length}b`);
+      if (msg.label) console.log(`   label: ${msg.label}`);
+      console.log(`   payload: ${JSON.stringify(msg.payload).slice(0, 300)}`);
+      break;
+
+    case "broadcast_request":
+      console.log(`📢 ${fromName} asks fleet broadcast: [${msg.kind}] ${msg.description}`);
+      // Relay as activity broadcast if requested
+      if (currentFleetTopic && msg.relay) {
+        pushChannel(currentFleetTopic, "activity:broadcast", {
+          payload: { kind: msg.kind || "relayed", description: `[via ${fromName}] ${msg.description}`, tags: msg.tags || ["relayed"] }
+        });
+      }
+      break;
+
+    case "status_request":
+      console.log(`📡 Status request from ${fromName}`);
+      if (fromId && currentFleetTopic) {
+        reply(fromId, {
+          type: "status_response",
+          agent: config.name,
+          state: config.state,
+          framework: config.framework,
+          capabilities: config.capabilities,
+          uptime_ms: Date.now() - startTime,
+          timestamp: new Date().toISOString(),
+        });
+      }
+      break;
+
+    case "status_response":
+      console.log(`📡 Status from ${fromName}: state=${msg.state} uptime=${formatMs(msg.uptime_ms)} caps=[${(msg.capabilities||[]).join(",")}]`);
+      break;
+
+    default:
+      console.log(`📨 DM from ${fromName} [${type}]: ${JSON.stringify(msg).slice(0, 300)}`);
+  }
+}
+
+function reply(toAgentId, message) {
+  if (!currentFleetTopic) return;
+  pushChannel(currentFleetTopic, "direct:send", {
+    payload: { to: toAgentId, message }
+  });
+}
+
+function formatMs(ms) {
+  if (!ms) return "?";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m${s % 60}s`;
+  return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
+}
+
+const startTime = Date.now();
 
 // ── Start ───────────────────────────────────────────────────
 connect();
