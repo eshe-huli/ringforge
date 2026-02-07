@@ -164,7 +164,11 @@ defmodule Hub.Live.Components do
     assigns = assign_new(assigns, :compact, fn -> false end)
 
     ~H"""
-    <div class={"accent-bar pl-4 py-2 pr-3 rounded-lg hover:bg-zinc-800/40 transition-colors duration-150 " <> kind_color(@activity.kind)}>
+    <div
+      class={"accent-bar pl-4 py-2 pr-3 rounded-lg hover:bg-zinc-800/40 transition-colors duration-150 cursor-pointer " <> kind_color(@activity.kind)}
+      phx-click="activity_click_agent"
+      phx-value-agent-id={@activity.agent_id}
+    >
       <div class="flex items-start gap-2.5">
         <span class="text-[10px] text-zinc-600 whitespace-nowrap mt-0.5 font-mono">
           <%= format_time(@activity.timestamp) %>
@@ -172,7 +176,7 @@ defmodule Hub.Live.Components do
         <span class="text-sm mt-px"><%= kind_icon(@activity.kind) %></span>
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2">
-            <span class="text-sm font-medium text-zinc-200"><%= @activity.agent_name %></span>
+            <span class="text-sm font-medium text-zinc-200 hover:text-amber-400 transition-colors"><%= @activity.agent_name %></span>
             <.badge variant="secondary" class={"text-[10px] px-1.5 py-0.5 " <> kind_badge(@activity.kind)}>
               <%= @activity.kind %>
             </.badge>
@@ -657,5 +661,9 @@ defmodule Hub.Live.Components do
   def render_icon(:bar_chart, class), do: Icons.bar_chart(%{class: class})
   def render_icon(:radio, class), do: Icons.radio(%{class: class})
   def render_icon(:x, class), do: Icons.x(%{class: class})
+  def render_icon(:pencil, class), do: Icons.pencil(%{class: class})
+  def render_icon(:trash, class), do: Icons.trash(%{class: class})
+  def render_icon(:copy, class), do: Icons.copy(%{class: class})
+  def render_icon(:log_out, class), do: Icons.log_out(%{class: class})
   def render_icon(_, _class), do: nil
 end

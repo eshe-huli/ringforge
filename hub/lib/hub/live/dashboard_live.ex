@@ -56,6 +56,8 @@ defmodule Hub.Live.DashboardLive do
           new_api_key: nil,
           new_api_key_type: nil,
           editing_fleet_name: false,
+          show_all_agents: false,
+          registered_agents: [],
           authenticated: true
         )
 
@@ -69,8 +71,9 @@ defmodule Hub.Live.DashboardLive do
         agents = load_agents(fleet_id)
         activities = load_recent_activities(fleet_id)
         usage = load_usage(tenant_id)
+        registered = load_registered_agents(tenant_id)
 
-        {:ok, assign(socket, agents: agents, activities: activities, usage: usage)}
+        {:ok, assign(socket, agents: agents, activities: activities, usage: usage, registered_agents: registered)}
 
       {:error, :unauthenticated} ->
         {:ok, assign(socket, authenticated: false, auth_error: nil, key_input: "")}
@@ -88,17 +91,20 @@ defmodule Hub.Live.DashboardLive do
   def handle_event("authenticate", %{"key" => key}, socket) do
     case validate_admin_key(key) do
       {:ok, tenant_id, fleet_id, fleet_name, plan} ->
+        registered = load_registered_agents(tenant_id)
         socket = assign(socket,
           tenant_id: tenant_id, fleet_id: fleet_id, fleet_name: fleet_name, plan: plan,
           agents: load_agents(fleet_id),
           activities: load_recent_activities(fleet_id),
           usage: load_usage(tenant_id),
+          registered_agents: registered,
           current_view: "dashboard", sidebar_collapsed: false,
           selected_agent: nil, agent_detail_open: false, agent_activities: [],
           msg_to: nil, msg_body: "", messages: [],
           filter: "all", search_query: "", sort_by: :name, sort_dir: :asc,
           toast: nil, cmd_open: false, cmd_query: "",
           new_api_key: nil, new_api_key_type: nil, editing_fleet_name: false,
+          show_all_agents: false,
           authenticated: true, auth_error: nil
         )
 
@@ -108,7 +114,7 @@ defmodule Hub.Live.DashboardLive do
           Process.send_after(self(), :refresh_quota, 1_000)
         end
 
-        {:noreply, socket}
+        {:noreply, push_event(socket, "store_session", %{tenant_id: tenant_id})}
 
       {:error, _} ->
         {:noreply, assign(socket, auth_error: "Invalid admin API key")}
@@ -222,6 +228,81 @@ defmodule Hub.Live.DashboardLive do
   end
 
   def handle_event("clear_toast", _, socket), do: {:noreply, assign(socket, toast: nil)}
+
+  # ── ESC key handler ────────────────────────────────────────
+
+  def handle_event("esc_pressed", _, socket) do
+    cond do
+      socket.assigns.cmd_open ->
+        {:noreply, assign(socket, cmd_open: false, cmd_query: "")}
+      socket.assigns.agent_detail_open ->
+        {:noreply, assign(socket, agent_detail_open: false)}
+      true ->
+        {:noreply, socket}
+    end
+  end
+
+  # ── Logout ─────────────────────────────────────────────────
+
+  def handle_event("logout", _, socket) do
+    {:noreply, assign(socket,
+      authenticated: false, auth_error: nil, key_input: "",
+      tenant_id: nil, fleet_id: nil, fleet_name: nil, plan: nil,
+      agents: %{}, activities: [], usage: %{}, registered_agents: []
+    )}
+  end
+
+  # ── Activity: click to open agent ──────────────────────────
+
+  def handle_event("activity_click_agent", %{"agent-id" => agent_id}, socket) do
+    {:noreply, assign(socket,
+      current_view: "agents",
+      selected_agent: agent_id,
+      agent_detail_open: true,
+      agent_activities: filter_agent_activities(socket.assigns.activities, agent_id)
+    )}
+  end
+
+  # ── Agents: toggle connected/all ───────────────────────────
+
+  def handle_event("toggle_agent_view", _, socket) do
+    new_val = !socket.assigns.show_all_agents
+    socket = if new_val do
+      assign(socket, show_all_agents: true, registered_agents: load_registered_agents(socket.assigns.tenant_id))
+    else
+      assign(socket, show_all_agents: false)
+    end
+    {:noreply, socket}
+  end
+
+  # ── Agents: deregister (delete from DB) ────────────────────
+
+  def handle_event("deregister_agent", %{"agent-id" => agent_id}, socket) do
+    import Ecto.Query
+    agent = Hub.Repo.get_by(Hub.Auth.Agent, agent_id: agent_id)
+    case agent do
+      nil ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Agent not found"})}
+      a ->
+        case Hub.Repo.delete(a) do
+          {:ok, _} ->
+            # Also kick if online
+            Hub.Endpoint.broadcast("agent:#{agent_id}", "disconnect", %{reason: "deregistered"})
+            registered = load_registered_agents(socket.assigns.tenant_id)
+            Process.send_after(self(), :clear_toast, 4_000)
+            {:noreply, assign(socket,
+              registered_agents: registered,
+              agents: Map.delete(socket.assigns.agents, agent_id),
+              agent_detail_open: false, selected_agent: nil,
+              toast: {:success, "Agent #{agent_id} deregistered"}
+            )}
+          {:error, _} ->
+            Process.send_after(self(), :clear_toast, 4_000)
+            {:noreply, assign(socket, toast: {:error, "Failed to deregister agent"})}
+        end
+    end
+  end
 
   # ── Settings: Fleet name editing ──────────────────────────────
 
@@ -490,7 +571,7 @@ defmodule Hub.Live.DashboardLive do
     assigns = assign(assigns, online_count: online, msg_used: msg_used)
 
     ~H"""
-    <div class="h-screen w-screen flex flex-col overflow-hidden bg-zinc-950" id="app">
+    <div class="h-screen w-screen flex flex-col overflow-hidden bg-zinc-950" id="app" phx-hook="EscListener">
       <%!-- Toast --%>
       <%= if @toast do %>
         <Components.toast type={elem(@toast, 0)} message={elem(@toast, 1)} />
@@ -536,6 +617,10 @@ defmodule Hub.Live.DashboardLive do
             <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse-dot mr-1.5"></span>
             Live
           </.badge>
+          <%!-- Logout --%>
+          <.button variant="ghost" size="icon" phx-click="logout" title="Sign out" class="h-8 w-8 text-zinc-500 hover:text-red-400">
+            <Icons.log_out class="w-4 h-4" />
+          </.button>
         </div>
       </header>
 
@@ -687,12 +772,36 @@ defmodule Hub.Live.DashboardLive do
   # ══════════════════════════════════════════════════════════
 
   defp render_agents(assigns) do
-    list = assigns.agents
+    # Merge connected (Presence) + registered (DB) if show_all
+    all_agents = if assigns.show_all_agents do
+      # Start with registered agents from DB
+      registered_map = Map.new(assigns.registered_agents, fn a ->
+        {a.agent_id, %{
+          name: a.name || a.agent_id,
+          state: "offline",
+          capabilities: a.capabilities || [],
+          task: nil,
+          framework: a.framework,
+          connected_at: nil,
+          last_seen_at: a.last_seen_at,
+          db_id: a.id
+        }}
+      end)
+      # Overlay with live presence data (online agents)
+      Map.merge(registered_map, assigns.agents)
+    else
+      assigns.agents
+    end
+
+    list = all_agents
       |> Enum.map(fn {id, m} -> {id, m} end)
       |> filter_agents(assigns.search_query)
       |> sort_agents(assigns.sort_by, assigns.sort_dir)
 
-    assigns = assign(assigns, agents_list: list)
+    online_count = Enum.count(assigns.agents, fn {_,m} -> m[:state] == "online" end)
+    total_registered = length(assigns.registered_agents)
+
+    assigns = assign(assigns, agents_list: list, agents_online: online_count, total_registered: total_registered)
 
     ~H"""
     <div class="h-full flex animate-fade-in">
@@ -702,14 +811,35 @@ defmodule Hub.Live.DashboardLive do
           <div class="flex items-center justify-between">
             <div>
               <h2 class="text-lg font-semibold text-zinc-100">Agents</h2>
-              <p class="text-sm text-zinc-500"><%= map_size(@agents) %> registered · <%= Enum.count(@agents, fn {_,m} -> m[:state] == "online" end) %> online</p>
+              <p class="text-sm text-zinc-500"><%= @total_registered %> registered · <%= @agents_online %> online</p>
             </div>
-            <div class="relative">
-              <.input
-                type="text" placeholder="Search agents..." value={@search_query} phx-keyup="update_search"
-                class="w-56 pl-8 bg-zinc-900 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600"
-              />
-              <span class="absolute left-2.5 top-3 text-zinc-500"><Icons.search class="w-3.5 h-3.5" /></span>
+            <div class="flex items-center gap-3">
+              <%!-- Connected/All toggle --%>
+              <div class="flex rounded-lg border border-zinc-800 p-0.5 bg-zinc-900">
+                <.button
+                  variant={if(!@show_all_agents, do: "secondary", else: "ghost")}
+                  size="sm"
+                  phx-click={if @show_all_agents, do: "toggle_agent_view", else: nil}
+                  class={"text-[10px] px-2.5 py-1 h-auto rounded-md font-medium " <> if(!@show_all_agents, do: "bg-zinc-800 text-zinc-100", else: "text-zinc-500 hover:text-zinc-300")}
+                >
+                  Connected
+                </.button>
+                <.button
+                  variant={if(@show_all_agents, do: "secondary", else: "ghost")}
+                  size="sm"
+                  phx-click={if !@show_all_agents, do: "toggle_agent_view", else: nil}
+                  class={"text-[10px] px-2.5 py-1 h-auto rounded-md font-medium " <> if(@show_all_agents, do: "bg-zinc-800 text-zinc-100", else: "text-zinc-500 hover:text-zinc-300")}
+                >
+                  All
+                </.button>
+              </div>
+              <div class="relative">
+                <.input
+                  type="text" placeholder="Search agents..." value={@search_query} phx-keyup="update_search"
+                  class="w-56 pl-8 bg-zinc-900 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600"
+                />
+                <span class="absolute left-2.5 top-3 text-zinc-500"><Icons.search class="w-3.5 h-3.5" /></span>
+              </div>
             </div>
           </div>
         </div>
@@ -811,16 +941,28 @@ defmodule Hub.Live.DashboardLive do
                   class="flex-1 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs">
                   <Icons.send class="w-3.5 h-3.5 mr-1.5" /> Message
                 </.button>
-                <.button
-                  variant="outline"
-                  phx-click="kick_agent"
-                  phx-value-agent-id={@selected_agent}
-                  data-confirm={"Disconnect #{dm[:name] || @selected_agent} from the fleet?"}
-                  class="text-xs border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-300"
-                >
-                  <Icons.x class="w-3.5 h-3.5 mr-1" /> Kick
-                </.button>
+                <%= if dm[:state] in ["online", "busy"] do %>
+                  <.button
+                    variant="outline"
+                    phx-click="kick_agent"
+                    phx-value-agent-id={@selected_agent}
+                    data-confirm={"Disconnect #{dm[:name] || @selected_agent} from the fleet?"}
+                    class="text-xs border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                  >
+                    <Icons.x class="w-3.5 h-3.5 mr-1" /> Kick
+                  </.button>
+                <% end %>
               </div>
+              <%!-- Deregister (danger) --%>
+              <.button
+                variant="outline"
+                phx-click="deregister_agent"
+                phx-value-agent-id={@selected_agent}
+                data-confirm={"Permanently deregister #{dm[:name] || @selected_agent}? This removes the agent from the database."}
+                class="w-full text-xs border-red-500/20 text-red-400/70 hover:bg-red-500/10 hover:text-red-300"
+              >
+                Deregister Agent
+              </.button>
 
               <.separator />
 
@@ -953,7 +1095,7 @@ defmodule Hub.Live.DashboardLive do
             </div>
           </div>
 
-          <div class="flex-1 overflow-y-auto px-4 py-4" id="msg-thread">
+          <div class="flex-1 overflow-y-auto px-4 py-4" id="msg-thread" phx-hook="ScrollBottom">
             <%= if @messages == [] do %>
               <div class="flex flex-col items-center justify-center h-full text-center">
                 <div class="w-12 h-12 rounded-2xl bg-zinc-800 flex items-center justify-center mb-3">
@@ -1137,7 +1279,7 @@ defmodule Hub.Live.DashboardLive do
                   <div class="flex items-center gap-2">
                     <span class="text-zinc-300 font-mono text-[11px]"><%= @fleet_name %></span>
                     <button phx-click="edit_fleet_name" class="text-zinc-600 hover:text-amber-400 transition-colors" title="Edit name">
-                      <Icons.settings class="w-3 h-3" />
+                      <Icons.pencil class="w-3 h-3" />
                     </button>
                   </div>
                 <% end %>
@@ -1176,7 +1318,12 @@ defmodule Hub.Live.DashboardLive do
                     <Icons.x class="w-3.5 h-3.5" />
                   </button>
                 </div>
-                <code class="text-[11px] text-zinc-200 font-mono block break-all select-all bg-zinc-900/50 rounded p-2"><%= @new_api_key %></code>
+                <div class="flex items-center gap-2">
+                  <code class="text-[11px] text-zinc-200 font-mono block break-all select-all bg-zinc-900/50 rounded p-2 flex-1"><%= @new_api_key %></code>
+                  <button phx-hook="CopyKey" id="copy-key-btn" data-key={@new_api_key} class="shrink-0 text-[10px] text-zinc-400 hover:text-amber-400 px-2 py-1 rounded border border-zinc-700 hover:border-amber-500/30 transition-colors">
+                    Copy
+                  </button>
+                </div>
                 <p class="text-[10px] text-amber-400/70 mt-1.5">⚠ Save this key now — it will not be shown again</p>
               </div>
             <% end %>
@@ -1329,6 +1476,15 @@ defmodule Hub.Live.DashboardLive do
   end
 
   defp load_usage(tenant_id), do: Hub.Quota.get_usage(tenant_id)
+
+  defp load_registered_agents(tenant_id) do
+    import Ecto.Query
+    from(a in Hub.Auth.Agent,
+      where: a.tenant_id == ^tenant_id,
+      order_by: [desc: a.inserted_at],
+      preload: [:fleet]
+    ) |> Hub.Repo.all()
+  end
 
   defp load_conversation(fleet_id, agent_id) do
     case Hub.DirectMessage.history(fleet_id, "dashboard", agent_id, limit: 50) do

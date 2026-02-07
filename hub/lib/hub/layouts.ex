@@ -231,9 +231,51 @@ defmodule Hub.Layouts do
         <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/phoenix@1.7.21/priv/static/phoenix.min.js"></script>
         <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/phoenix_live_view@1.1.22/priv/static/phoenix_live_view.min.js"></script>
         <script data-cfasync="false">
+          // LiveView Hooks
+          let Hooks = {}
+
+          // Auto-scroll message thread to bottom
+          Hooks.ScrollBottom = {
+            mounted() { this.scrollToBottom() },
+            updated() { this.scrollToBottom() },
+            scrollToBottom() {
+              this.el.scrollTop = this.el.scrollHeight
+            }
+          }
+
+          // ESC key handler for command palette and modals
+          Hooks.EscListener = {
+            mounted() {
+              this.handler = (e) => {
+                if (e.key === 'Escape') {
+                  this.pushEvent('esc_pressed', {})
+                }
+              }
+              window.addEventListener('keydown', this.handler)
+            },
+            destroyed() {
+              window.removeEventListener('keydown', this.handler)
+            }
+          }
+
+          // Copy to clipboard
+          Hooks.CopyKey = {
+            mounted() {
+              this.el.addEventListener('click', () => {
+                let text = this.el.dataset.key
+                navigator.clipboard.writeText(text).then(() => {
+                  let orig = this.el.textContent
+                  this.el.textContent = 'Copied!'
+                  setTimeout(() => { this.el.textContent = orig }, 1500)
+                })
+              })
+            }
+          }
+
           let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
           let liveSocket = new window.LiveView.LiveSocket("/live", window.Phoenix.Socket, {
-            params: { _csrf_token: csrfToken }
+            params: { _csrf_token: csrfToken },
+            hooks: Hooks
           })
           liveSocket.connect()
           window.liveSocket = liveSocket
