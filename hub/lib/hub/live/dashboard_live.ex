@@ -154,6 +154,14 @@ defmodule Hub.Live.DashboardLive do
     {:noreply, redirect(socket, to: "/webhooks")}
   end
 
+  def handle_event("navigate", %{"view" => "metrics"}, socket) do
+    {:noreply, redirect(socket, to: "/dashboard/metrics")}
+  end
+
+  def handle_event("navigate", %{"view" => "provisioning"}, socket) do
+    {:noreply, redirect(socket, to: "/provisioning")}
+  end
+
   def handle_event("navigate", %{"view" => view} = params, socket) do
     socket = assign(socket, current_view: view, cmd_open: false, cmd_query: "")
 
@@ -1031,6 +1039,8 @@ defmodule Hub.Live.DashboardLive do
             <Components.nav_item view="activity" icon={:activity} label="Activity" active={@current_view == "activity"} />
             <Components.nav_item view="messaging" icon={:message_square} label="Messaging" active={@current_view == "messaging"} />
             <Components.nav_item view="quotas" icon={:gauge} label="Quotas" active={@current_view == "quotas"} />
+            <Components.nav_item view="metrics" icon={:activity} label="Metrics" active={false} />
+            <Components.nav_item view="provisioning" icon={:cloud} label="Provisioning" active={false} />
             <Components.nav_item view="webhooks" icon={:webhook} label="Webhooks" active={false} />
             <Components.nav_item view="billing" icon={:credit_card} label="Billing" active={false} />
             <Components.nav_item view="settings" icon={:settings} label="Settings" active={@current_view == "settings"} />

@@ -94,6 +94,12 @@ defmodule Hub.Task do
 
     :ets.insert(@table, {task.task_id, task})
     increment_daily_counter()
+
+    Hub.Telemetry.execute([:hub, :task, :submitted], %{count: 1}, %{
+      fleet_id: task.fleet_id,
+      task_id: task.task_id
+    })
+
     {:ok, task}
   end
 
@@ -141,6 +147,13 @@ defmodule Hub.Task do
       {:ok, %{status: status} = task} when status in [:assigned, :running] ->
         updated = %{task | status: :completed, result: result, completed_at: DateTime.utc_now()}
         :ets.insert(@table, {task_id, updated})
+
+        duration_ms = if task.created_at, do: DateTime.diff(updated.completed_at, task.created_at, :millisecond), else: 0
+        Hub.Telemetry.execute([:hub, :task, :completed], %{count: 1, duration_ms: duration_ms}, %{
+          fleet_id: task.fleet_id,
+          task_id: task_id
+        })
+
         {:ok, updated}
 
       {:ok, %{status: status}} ->
@@ -159,6 +172,12 @@ defmodule Hub.Task do
       {:ok, %{status: status} = task} when status in [:pending, :assigned, :running] ->
         updated = %{task | status: :failed, error: error, completed_at: DateTime.utc_now()}
         :ets.insert(@table, {task_id, updated})
+
+        Hub.Telemetry.execute([:hub, :task, :failed], %{count: 1}, %{
+          fleet_id: task.fleet_id,
+          task_id: task_id
+        })
+
         {:ok, updated}
 
       {:ok, %{status: status}} ->

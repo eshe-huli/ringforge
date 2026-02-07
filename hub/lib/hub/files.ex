@@ -76,6 +76,11 @@ defmodule Hub.Files do
               {:ok, file} ->
                 {:ok, url, expires_at} = S3.presigned_put(s3_key, content_type, size)
 
+                Hub.Telemetry.execute([:hub, :file, :upload], %{count: 1, size: size}, %{
+                  fleet_id: fleet_id,
+                  tenant_id: tenant_id
+                })
+
                 {:ok, %{
                   file_id: file.id,
                   upload_url: url,

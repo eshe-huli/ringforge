@@ -153,9 +153,12 @@ defmodule Hub.WebhookDispatcher do
             next_retry_at: nil
           })
 
+          Hub.Telemetry.execute([:hub, :webhook, :delivered], %{count: 1}, %{status: "success"})
+
           # Cleanup old logs
           Webhooks.cleanup_deliveries(webhook.id)
         else
+          Hub.Telemetry.execute([:hub, :webhook, :delivered], %{count: 1}, %{status: "failed"})
           handle_failure(webhook, delivery, config, status, body)
         end
 

@@ -604,4 +604,98 @@ defmodule Hub.Live.Icons do
     </svg>
     """
   end
+
+  attr :class, :string, default: "w-4 h-4"
+
+  def server(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect width="20" height="8" x="2" y="2" rx="2" ry="2"></rect>
+      <rect width="20" height="8" x="2" y="14" rx="2" ry="2"></rect>
+      <line x1="6" x2="6.01" y1="6" y2="6"></line>
+      <line x1="6" x2="6.01" y1="18" y2="18"></line>
+    </svg>
+    """
+  end
+
+  attr :class, :string, default: "w-4 h-4"
+
+  def cloud(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path>
+    </svg>
+    """
+  end
+
+  attr :class, :string, default: "w-4 h-4"
+
+  def dollar_sign(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="12" x2="12" y1="2" y2="22"></line>
+      <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+    </svg>
+    """
+  end
+
+  attr :class, :string, default: "w-4 h-4"
+
+  def map_pin(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path>
+      <circle cx="12" cy="10" r="3"></circle>
+    </svg>
+    """
+  end
+
+  attr :class, :string, default: "w-4 h-4"
+
+  def refresh_cw(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+      <path d="M21 3v5h-5"></path>
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+      <path d="M8 16H3v5"></path>
+    </svg>
+    """
+  end
+
+  attr :class, :string, default: "w-4 h-4"
+
+  def external_link(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M15 3h6v6"></path>
+      <path d="M10 14 21 3"></path>
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+    </svg>
+    """
+  end
+
+  attr :class, :string, default: "w-4 h-4"
+
+  def eye(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </svg>
+    """
+  end
+
+  attr :class, :string, default: "w-4 h-4"
+
+  def eye_off(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"></path>
+      <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"></path>
+      <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"></path>
+      <line x1="2" x2="22" y1="2" y2="22"></line>
+    </svg>
+    """
+  end
 end

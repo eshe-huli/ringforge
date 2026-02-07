@@ -1,10 +1,9 @@
 defmodule Hub.MetricsController do
   @moduledoc """
-  Simple `/metrics` endpoint that returns Prometheus-compatible text format.
+  `/metrics` endpoint that returns Prometheus-compatible text format.
 
-  Exposes VM stats and Hub telemetry counters as Prometheus gauges/counters.
-  No external Prometheus library required — we build the text output directly
-  from BEAM introspection.
+  Exposes both BEAM system metrics and Hub application metrics
+  (tracked via Hub.Metrics ETS-backed counters).
   """
   use Phoenix.Controller, formats: [:text]
 
@@ -22,44 +21,47 @@ defmodule Hub.MetricsController do
       vm_system_metrics(),
       vm_run_queue_metrics(),
       vm_scheduler_metrics(),
-      hub_info_metrics()
+      vm_io_metrics(),
+      hub_info_metrics(),
+      # Application metrics from Hub.Metrics ETS
+      [Hub.Metrics.format_prometheus()]
     ]
     |> List.flatten()
     |> Enum.join("\n")
     |> Kernel.<>("\n")
   end
 
-  # ── VM Memory ──────────────────────────────────────────────
+  # ── BEAM Memory ────────────────────────────────────────────
 
   defp vm_memory_metrics do
     memory = :erlang.memory()
 
     [
-      "# HELP vm_memory_bytes_total Total memory allocated by the Erlang VM.",
-      "# TYPE vm_memory_bytes_total gauge",
-      prom("vm_memory_bytes_total", %{kind: "total"}, Keyword.get(memory, :total, 0)),
-      prom("vm_memory_bytes_total", %{kind: "processes"}, Keyword.get(memory, :processes, 0)),
-      prom("vm_memory_bytes_total", %{kind: "binary"}, Keyword.get(memory, :binary, 0)),
-      prom("vm_memory_bytes_total", %{kind: "ets"}, Keyword.get(memory, :ets, 0)),
-      prom("vm_memory_bytes_total", %{kind: "atom"}, Keyword.get(memory, :atom, 0)),
-      prom("vm_memory_bytes_total", %{kind: "code"}, Keyword.get(memory, :code, 0)),
-      prom("vm_memory_bytes_total", %{kind: "system"}, Keyword.get(memory, :system, 0))
+      "# HELP beam_memory_bytes Memory allocated by the Erlang VM.",
+      "# TYPE beam_memory_bytes gauge",
+      prom("beam_memory_bytes", %{type: "total"}, Keyword.get(memory, :total, 0)),
+      prom("beam_memory_bytes", %{type: "processes"}, Keyword.get(memory, :processes, 0)),
+      prom("beam_memory_bytes", %{type: "binary"}, Keyword.get(memory, :binary, 0)),
+      prom("beam_memory_bytes", %{type: "ets"}, Keyword.get(memory, :ets, 0)),
+      prom("beam_memory_bytes", %{type: "atom"}, Keyword.get(memory, :atom, 0)),
+      prom("beam_memory_bytes", %{type: "code"}, Keyword.get(memory, :code, 0)),
+      prom("beam_memory_bytes", %{type: "system"}, Keyword.get(memory, :system, 0))
     ]
   end
 
-  # ── VM System Counts ───────────────────────────────────────
+  # ── BEAM System Counts ─────────────────────────────────────
 
   defp vm_system_metrics do
     [
-      "# HELP vm_process_count Number of processes currently existing.",
-      "# TYPE vm_process_count gauge",
-      prom("vm_process_count", %{}, :erlang.system_info(:process_count)),
-      "# HELP vm_atom_count Number of atoms currently existing.",
-      "# TYPE vm_atom_count gauge",
-      prom("vm_atom_count", %{}, :erlang.system_info(:atom_count)),
-      "# HELP vm_port_count Number of ports currently existing.",
-      "# TYPE vm_port_count gauge",
-      prom("vm_port_count", %{}, :erlang.system_info(:port_count))
+      "# HELP beam_process_count Number of processes currently existing.",
+      "# TYPE beam_process_count gauge",
+      prom("beam_process_count", %{}, :erlang.system_info(:process_count)),
+      "# HELP beam_atom_count Number of atoms currently existing.",
+      "# TYPE beam_atom_count gauge",
+      prom("beam_atom_count", %{}, :erlang.system_info(:atom_count)),
+      "# HELP beam_port_count Number of ports currently existing.",
+      "# TYPE beam_port_count gauge",
+      prom("beam_port_count", %{}, :erlang.system_info(:port_count))
     ]
   end
 
@@ -72,11 +74,11 @@ defmodule Hub.MetricsController do
     io = List.last(run_queues) || 0
 
     [
-      "# HELP vm_run_queue_lengths Total run queue lengths.",
-      "# TYPE vm_run_queue_lengths gauge",
-      prom("vm_run_queue_lengths", %{kind: "total"}, total),
-      prom("vm_run_queue_lengths", %{kind: "cpu"}, cpu),
-      prom("vm_run_queue_lengths", %{kind: "io"}, io)
+      "# HELP beam_run_queue_lengths Total run queue lengths.",
+      "# TYPE beam_run_queue_lengths gauge",
+      prom("beam_run_queue_lengths", %{kind: "total"}, total),
+      prom("beam_run_queue_lengths", %{kind: "cpu"}, cpu),
+      prom("beam_run_queue_lengths", %{kind: "io"}, io)
     ]
   end
 
@@ -86,9 +88,22 @@ defmodule Hub.MetricsController do
     scheduler_count = :erlang.system_info(:schedulers_online)
 
     [
-      "# HELP vm_schedulers_online Number of schedulers online.",
-      "# TYPE vm_schedulers_online gauge",
-      prom("vm_schedulers_online", %{}, scheduler_count)
+      "# HELP beam_scheduler_utilization Number of schedulers online.",
+      "# TYPE beam_scheduler_utilization gauge",
+      prom("beam_scheduler_utilization", %{}, scheduler_count)
+    ]
+  end
+
+  # ── I/O bytes ──────────────────────────────────────────────
+
+  defp vm_io_metrics do
+    {{:input, input}, {:output, output}} = :erlang.statistics(:io)
+
+    [
+      "# HELP beam_io_bytes_total Total I/O bytes.",
+      "# TYPE beam_io_bytes_total counter",
+      prom("beam_io_bytes_total", %{direction: "in"}, input),
+      prom("beam_io_bytes_total", %{direction: "out"}, output)
     ]
   end
 

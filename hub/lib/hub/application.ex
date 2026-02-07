@@ -52,6 +52,15 @@ defmodule Hub.Application do
       Hub.TaskSupervisor,
       {Hub.Workers.OllamaBridge, []},
 
+      # Agent provisioning worker (async cloud provisioning)
+      {Hub.ProvisioningWorker, []},
+
+      # Prometheus-style metrics (ETS-backed, attaches telemetry handlers)
+      {Hub.Metrics, []},
+
+      # Alert checker (periodic alert rule evaluation)
+      {Hub.Alerts, []},
+
       # Webhook dispatcher (outbound webhook delivery)
       {Hub.WebhookDispatcher, []},
 

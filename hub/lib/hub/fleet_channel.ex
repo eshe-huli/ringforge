@@ -103,6 +103,28 @@ defmodule Hub.FleetChannel do
     # Track in Phoenix.Presence
     {:ok, _ref} = FleetPresence.track(socket, socket.assigns.agent_id, meta)
 
+    # Start session tracking (async to avoid blocking join)
+    socket = if agent do
+      Task.start(fn ->
+        case Auth.start_agent_session(agent.id, agent.fleet_id) do
+          {:ok, session} ->
+            Logger.debug("[FleetChannel] Session #{session.id} started for #{agent.agent_id}")
+          _ -> :ok
+        end
+      end)
+
+      # Store agent DB id for session lookup on terminate
+      assign(socket, :agent_db_id, agent.id)
+    else
+      socket
+    end
+
+    # Emit telemetry
+    Hub.Telemetry.execute([:hub, :channel, :join], %{count: 1}, %{
+      agent_id: socket.assigns.agent_id,
+      fleet_id: socket.assigns.fleet_id
+    })
+
     # Broadcast joined event to all fleet members
     broadcast!(socket, "presence:joined", %{
       "type" => "presence",
@@ -638,6 +660,16 @@ defmodule Hub.FleetChannel do
 
           true ->
             Hub.Quota.increment(socket.assigns.tenant_id, :messages_today)
+            Hub.Quota.increment(socket.assigns.tenant_id, :messages_today)
+            # Increment agent's lifetime message counter
+            Task.start(fn -> Auth.increment_agent_messages(socket.assigns.agent_id) end)
+
+            Hub.Telemetry.execute([:hub, :message, :sent], %{count: 1}, %{
+              agent_id: socket.assigns.agent_id,
+              fleet_id: socket.assigns.fleet_id,
+              to: to
+            })
+
             case DirectMessage.send_message(
                    socket.assigns.fleet_id,
                    socket.assigns.agent_id,
@@ -1093,6 +1125,12 @@ defmodule Hub.FleetChannel do
     {:noreply, socket}
   end
 
+  # Agent migration arrival (from PubSub)
+  def handle_info({:agent_arrived, msg}, socket) do
+    push(socket, "agent:arrived", msg)
+    {:noreply, socket}
+  end
+
   def handle_info({:group_invite, invite}, socket) do
     push(socket, "group:invite", %{
       "type" => "group", "event" => "invite",
@@ -1278,6 +1316,141 @@ defmodule Hub.FleetChannel do
     {:reply, {:error, %{reason: "missing_file_id", message: "Payload must include 'file_id'."}}, socket}
   end
 
+  # ── Agent Profile Handlers ───────────────────────────────────
+
+  def handle_in("agent:update_profile", %{"payload" => payload}, socket) do
+    case Auth.find_agent(socket.assigns.agent_id) do
+      {:ok, agent} ->
+        profile_attrs = %{}
+        |> maybe_put(:display_name, Map.get(payload, "display_name"))
+        |> maybe_put(:avatar_url, Map.get(payload, "avatar_url"))
+        |> maybe_put(:description, Map.get(payload, "description"))
+        |> maybe_put(:tags, Map.get(payload, "tags"))
+        |> maybe_put(:metadata, Map.get(payload, "metadata"))
+
+        case Auth.update_agent_profile(agent, profile_attrs) do
+          {:ok, updated} ->
+            profile = Hub.Auth.Agent.to_profile(updated)
+
+            broadcast!(socket, "agent:profile_updated", %{
+              "type" => "agent",
+              "event" => "profile_updated",
+              "payload" => profile
+            })
+
+            {:reply, {:ok, %{
+              "type" => "agent",
+              "event" => "profile_updated",
+              "payload" => profile
+            }}, socket}
+
+          {:error, changeset} ->
+            {:reply, {:error, %{reason: "validation_failed", details: inspect(changeset.errors)}}, socket}
+        end
+
+      {:error, _} ->
+        {:reply, {:error, %{reason: "agent_not_found"}}, socket}
+    end
+  end
+
+  def handle_in("agent:update_profile", payload, socket) when is_map(payload) do
+    handle_in("agent:update_profile", %{"payload" => payload}, socket)
+  end
+
+  def handle_in("agent:get_profile", %{"payload" => payload}, socket) do
+    agent_id = Map.get(payload, "agent_id", socket.assigns.agent_id)
+
+    case Auth.get_agent_profile(agent_id) do
+      {:ok, profile} ->
+        {:reply, {:ok, %{
+          "type" => "agent",
+          "event" => "profile",
+          "payload" => profile
+        }}, socket}
+
+      {:error, :not_found} ->
+        {:reply, {:error, %{reason: "agent_not_found"}}, socket}
+    end
+  end
+
+  def handle_in("agent:get_profile", _payload, socket) do
+    handle_in("agent:get_profile", %{"payload" => %{}}, socket)
+  end
+
+  def handle_in("agent:list_profiles", _payload, socket) do
+    {:ok, profiles} = Auth.list_agent_profiles(socket.assigns.fleet_id)
+
+    {:reply, {:ok, %{
+      "type" => "agent",
+      "event" => "profiles",
+      "payload" => %{"agents" => profiles, "count" => length(profiles)}
+    }}, socket}
+  end
+
+  # ── Agent Migration ────────────────────────────────────────
+
+  def handle_in("agent:migrate", %{"payload" => %{"fleet_id" => target_fleet_id}}, socket) do
+    agent_id = socket.assigns.agent_id
+
+    case Auth.migrate_agent(agent_id, target_fleet_id) do
+      {:ok, _updated} ->
+        # Broadcast departure from current fleet
+        broadcast!(socket, "agent:departed", %{
+          "type" => "agent",
+          "event" => "departed",
+          "payload" => %{
+            "agent_id" => agent_id,
+            "target_fleet_id" => target_fleet_id
+          }
+        })
+
+        # Notify target fleet of arrival
+        Phoenix.PubSub.broadcast(Hub.PubSub, "fleet:#{target_fleet_id}", {:agent_arrived, %{
+          "type" => "agent",
+          "event" => "arrived",
+          "payload" => %{
+            "agent_id" => agent_id,
+            "from_fleet_id" => socket.assigns.fleet_id
+          }
+        }})
+
+        {:reply, {:ok, %{
+          "type" => "agent",
+          "event" => "migrated",
+          "payload" => %{
+            "agent_id" => agent_id,
+            "fleet_id" => target_fleet_id,
+            "message" => "Agent migrated. Reconnect to join the new fleet."
+          }
+        }}, socket}
+
+      {:error, :name_conflict} ->
+        {:reply, {:error, %{
+          reason: "name_conflict",
+          message: "An agent with the same name already exists in the target fleet."
+        }}, socket}
+
+      {:error, :cross_tenant} ->
+        {:reply, {:error, %{
+          reason: "cross_tenant",
+          message: "Cannot migrate agents across tenants."
+        }}, socket}
+
+      {:error, :same_fleet} ->
+        {:reply, {:error, %{
+          reason: "same_fleet",
+          message: "Agent is already in this fleet."
+        }}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{reason: inspect(reason)}}, socket}
+    end
+  end
+
+  def handle_in("agent:migrate", _payload, socket) do
+    {:reply, {:error, %{reason: "payload must include \"fleet_id\""}}, socket}
+  end
+
   # ── auth:rotate_key — rotate Ed25519 public key ─────────────
 
   def handle_in("auth:rotate_key", %{"payload" => %{"public_key" => pk_base64}}, socket) do
@@ -1333,11 +1506,18 @@ defmodule Hub.FleetChannel do
   # ── Terminate — cleanup on disconnect ──────────────────────
 
   @impl true
-  def terminate(_reason, socket) do
+  def terminate(reason, socket) do
     agent_id = socket.assigns.agent_id
 
     # Decrement connected_agents quota
     Hub.Quota.decrement(socket.assigns.tenant_id, :connected_agents)
+
+    # Emit telemetry
+    Hub.Telemetry.execute([:hub, :channel, :leave], %{count: 1}, %{
+      agent_id: agent_id,
+      fleet_id: socket.assigns.fleet_id,
+      reason: inspect(reason)
+    })
 
     # Broadcast left event
     broadcast!(socket, "presence:left", %{
@@ -1348,9 +1528,33 @@ defmodule Hub.FleetChannel do
       }
     })
 
-    # Update last_seen_at in DB
+    # Update last_seen_at in DB and end session
     case Auth.find_agent(agent_id) do
-      {:ok, agent} -> Auth.touch_agent(agent)
+      {:ok, agent} ->
+        Auth.touch_agent(agent)
+
+        # End active session — find the most recent open session for this agent
+        Task.start(fn ->
+          import Ecto.Query
+          case Hub.Repo.one(
+            from s in Hub.Auth.AgentSession,
+              where: s.agent_id == ^agent.id and is_nil(s.disconnected_at),
+              order_by: [desc: s.connected_at],
+              limit: 1,
+              select: s.id
+          ) do
+            nil -> :ok
+            session_id ->
+              disconnect_reason = case reason do
+                {:shutdown, :closed} -> "closed"
+                {:shutdown, r} -> "shutdown:#{inspect(r)}"
+                :normal -> "normal"
+                _ -> inspect(reason)
+              end
+              Auth.end_agent_session(session_id, disconnect_reason)
+          end
+        end)
+
       _ -> :ok
     end
 
@@ -1359,6 +1563,9 @@ defmodule Hub.FleetChannel do
   end
 
   # ── Private Helpers ─────────────────────────────────────────
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp maybe_sync_agent_metadata(nil, _payload), do: :ok
 

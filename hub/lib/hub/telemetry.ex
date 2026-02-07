@@ -7,19 +7,20 @@ defmodule Hub.Telemetry do
 
   ## Event Prefixes
 
-      [:hub, :node, :join]
-      [:hub, :node, :leave]
-      [:hub, :sync, :push]
-      [:hub, :sync, :pull]
-      [:hub, :blob, :put]
-      [:hub, :blob, :get]
-      [:hub, :doc, :put]
-      [:hub, :doc, :get]
-      [:hub, :channel, :join]
-      [:hub, :channel, :leave]
+      [:hub, :channel, :join]      — agent connects
+      [:hub, :channel, :leave]     — agent disconnects
+      [:hub, :message, :sent]      — message sent
+      [:hub, :task, :submitted]    — task submitted
+      [:hub, :task, :completed]    — task completed
+      [:hub, :task, :failed]       — task failed
+      [:hub, :memory, :write]      — memory write
+      [:hub, :file, :upload]       — file uploaded
+      [:hub, :webhook, :delivered] — webhook delivered
+      [:hub, :auth, :success]      — auth success
+      [:hub, :auth, :failure]      — auth failure
 
   All events carry at minimum `%{system_time: integer}` in measurements
-  and `%{node_id: binary}` in metadata.
+  and relevant context in metadata.
   """
   use Supervisor
 
@@ -41,7 +42,36 @@ defmodule Hub.Telemetry do
   @doc "Returns the list of all Hub telemetry metrics definitions."
   def metrics do
     [
-      # ── Node lifecycle ──────────────────────────────────────
+      # ── Channel lifecycle ──────────────────────────────────
+      counter("hub.channel.join.count", tags: [:fleet_id]),
+      counter("hub.channel.leave.count", tags: [:fleet_id]),
+
+      # ── Messages ───────────────────────────────────────────
+      counter("hub.message.sent.count", tags: [:fleet_id]),
+
+      # ── Tasks ──────────────────────────────────────────────
+      counter("hub.task.submitted.count", tags: [:fleet_id]),
+      counter("hub.task.completed.count", tags: [:fleet_id]),
+      counter("hub.task.failed.count", tags: [:fleet_id]),
+      distribution("hub.task.duration",
+        unit: {:native, :millisecond},
+        tags: [:fleet_id]
+      ),
+
+      # ── Memory ─────────────────────────────────────────────
+      counter("hub.memory.write.count", tags: [:fleet_id]),
+
+      # ── Files ──────────────────────────────────────────────
+      counter("hub.file.upload.count", tags: [:fleet_id]),
+
+      # ── Webhooks ───────────────────────────────────────────
+      counter("hub.webhook.delivered.count", tags: [:status]),
+
+      # ── Auth ───────────────────────────────────────────────
+      counter("hub.auth.success.count", tags: [:method]),
+      counter("hub.auth.failure.count", tags: [:method]),
+
+      # ── Node lifecycle (legacy) ────────────────────────────
       counter("hub.node.join.count", tags: [:node_id]),
       counter("hub.node.leave.count", tags: [:node_id]),
 
@@ -83,10 +113,6 @@ defmodule Hub.Telemetry do
         unit: {:native, :millisecond},
         tags: [:node_id]
       ),
-
-      # ── Channel lifecycle ──────────────────────────────────
-      counter("hub.channel.join.count", tags: [:node_id, :topic]),
-      counter("hub.channel.leave.count", tags: [:node_id, :topic]),
 
       # ── VM metrics (polled) ────────────────────────────────
       last_value("vm.memory.total", unit: :byte),

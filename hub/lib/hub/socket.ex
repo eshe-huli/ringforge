@@ -21,6 +21,8 @@ defmodule Hub.Socket do
          {:ok, agent} <- Hub.Auth.register_agent(api_key, agent_params) do
       Logger.info("Agent registered: #{agent.agent_id} (tenant=#{agent.tenant_id})")
 
+      Hub.Telemetry.execute([:hub, :auth, :success], %{count: 1}, %{method: "api_key"})
+
       socket =
         socket
         |> assign(:tenant_id, agent.tenant_id)
@@ -32,6 +34,7 @@ defmodule Hub.Socket do
       {:ok, socket}
     else
       {:error, reason} ->
+        Hub.Telemetry.execute([:hub, :auth, :failure], %{count: 1}, %{method: "api_key"})
         Logger.warning("Socket auth failed (registration): #{inspect(reason)}")
         :error
     end
@@ -43,6 +46,7 @@ defmodule Hub.Socket do
          {:ok, agent} <- Hub.Auth.find_agent(agent_id),
          true <- agent.tenant_id == api_key.tenant_id do
       Hub.Auth.touch_agent(agent)
+      Hub.Telemetry.execute([:hub, :auth, :success], %{count: 1}, %{method: "api_key"})
       Logger.info("Agent reconnected (key-verified): #{agent.agent_id}")
 
       socket =
@@ -56,10 +60,12 @@ defmodule Hub.Socket do
       {:ok, socket}
     else
       false ->
+        Hub.Telemetry.execute([:hub, :auth, :failure], %{count: 1}, %{method: "api_key"})
         Logger.warning("Socket auth failed (reconnect): tenant mismatch for #{agent_id}")
         :error
 
       {:error, reason} ->
+        Hub.Telemetry.execute([:hub, :auth, :failure], %{count: 1}, %{method: "api_key"})
         Logger.warning("Socket auth failed (reconnect): #{inspect(reason)} for #{agent_id}")
         :error
     end
@@ -81,6 +87,7 @@ defmodule Hub.Socket do
       # Challenge consumed (deleted from store) on successful verify
       Hub.ChallengeStore.revoke(agent_id)
       Hub.Auth.touch_agent(agent)
+      Hub.Telemetry.execute([:hub, :auth, :success], %{count: 1}, %{method: "ed25519"})
       Logger.info("Agent reconnected (challenge-verified): #{agent.agent_id}")
 
       socket =
@@ -94,6 +101,7 @@ defmodule Hub.Socket do
       {:ok, socket}
     else
       {:error, reason} ->
+        Hub.Telemetry.execute([:hub, :auth, :failure], %{count: 1}, %{method: "ed25519"})
         Logger.warning("Socket auth failed (challenge): #{inspect(reason)} for #{agent_id}")
         :error
     end

@@ -70,6 +70,18 @@ defmodule Hub.Router do
     # Webhooks API (authenticated)
     resources "/webhooks", WebhookApiController, only: [:index, :create, :show, :update, :delete]
     post "/webhooks/:id/test", WebhookApiController, :test
+
+    # Provisioning API (authenticated)
+    post "/providers", ProvisioningController, :create_credential
+    get "/providers", ProvisioningController, :list_credentials
+    delete "/providers/:id", ProvisioningController, :delete_credential
+    get "/providers/regions/:provider", ProvisioningController, :list_regions
+    get "/providers/sizes/:provider", ProvisioningController, :list_sizes
+
+    post "/agents/provision", ProvisioningController, :provision_agent
+    get "/agents/provision", ProvisioningController, :list_agents
+    delete "/agents/provision/:id", ProvisioningController, :destroy_agent
+    get "/agents/provision/:id/status", ProvisioningController, :agent_status
   end
 
   scope "/", Hub do
@@ -96,8 +108,10 @@ defmodule Hub.Router do
   scope "/", Hub.Live do
     pipe_through :browser
     live "/dashboard", DashboardLive
+    live "/dashboard/metrics", MetricsLive
     live "/billing", BillingLive
     live "/webhooks", WebhooksLive
     live "/invites", InvitesLive
+    live "/provisioning", ProvisioningLive
   end
 end

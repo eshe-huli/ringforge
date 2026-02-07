@@ -79,6 +79,12 @@ defmodule Hub.Memory do
     broadcast_change(fleet_id, key, "set", entry["author"])
     publish_to_event_bus(fleet_id, key, "set", entry)
 
+    Hub.Telemetry.execute([:hub, :memory, :write], %{count: 1}, %{
+      fleet_id: fleet_id,
+      operation: "write",
+      key: key
+    })
+
     {:ok, entry}
   end
 

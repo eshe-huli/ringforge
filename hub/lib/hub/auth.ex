@@ -8,7 +8,7 @@ defmodule Hub.Auth do
 
   import Ecto.Query
   alias Hub.Repo
-  alias Hub.Auth.{Fleet, ApiKey, Agent}
+  alias Hub.Auth.{Fleet, ApiKey, Agent, AgentSession}
 
   @base62_alphabet ~c"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
@@ -101,7 +101,8 @@ defmodule Hub.Auth do
           update_attrs = %{
             framework: Map.get(agent_params, :framework) || existing.framework,
             capabilities: Map.get(agent_params, :capabilities) || existing.capabilities,
-            last_seen_at: DateTime.utc_now() |> DateTime.truncate(:second)
+            last_seen_at: DateTime.utc_now() |> DateTime.truncate(:second),
+            total_connections: (existing.total_connections || 0) + 1
           }
 
           # Bind or update public key if provided
@@ -116,6 +117,8 @@ defmodule Hub.Auth do
           |> Repo.update()
 
         nil ->
+          attrs = Map.put(attrs, :total_connections, 1)
+
           case %Agent{} |> Agent.changeset(attrs) |> Repo.insert() do
             {:ok, agent} ->
               {:ok, agent}
@@ -130,6 +133,7 @@ defmodule Hub.Auth do
       end
     else
       # Unnamed agent: always create new
+      attrs = Map.put(attrs, :total_connections, 1)
       %Agent{} |> Agent.changeset(attrs) |> Repo.insert()
     end
   end
@@ -201,6 +205,117 @@ defmodule Hub.Auth do
     agent
     |> Agent.changeset(%{last_seen_at: DateTime.utc_now() |> DateTime.truncate(:second)})
     |> Repo.update()
+  end
+
+  # --- Agent Profiles ---
+
+  @doc """
+  Updates an agent's profile fields (avatar, description, tags, display_name, metadata).
+  """
+  def update_agent_profile(%Agent{} = agent, profile_attrs) do
+    agent
+    |> Agent.profile_changeset(profile_attrs)
+    |> Repo.update()
+  end
+
+  @doc """
+  Gets an agent's profile by agent_id.
+  """
+  def get_agent_profile(agent_id) when is_binary(agent_id) do
+    case Repo.get_by(Agent, agent_id: agent_id) do
+      nil -> {:error, :not_found}
+      agent -> {:ok, Agent.to_profile(agent)}
+    end
+  end
+
+  @doc """
+  Lists all agent profiles in a fleet (including offline agents).
+  """
+  def list_agent_profiles(fleet_id) when is_binary(fleet_id) do
+    agents =
+      from(a in Agent,
+        where: a.fleet_id == ^fleet_id,
+        order_by: [desc: a.last_seen_at]
+      )
+      |> Repo.all()
+      |> Enum.map(&Agent.to_profile/1)
+
+    {:ok, agents}
+  end
+
+  @doc """
+  Increment the total_messages counter for an agent.
+  """
+  def increment_agent_messages(agent_id) when is_binary(agent_id) do
+    from(a in Agent, where: a.agent_id == ^agent_id)
+    |> Repo.update_all(inc: [total_messages: 1])
+
+    :ok
+  end
+
+  # --- Session Tracking ---
+
+  @doc """
+  Creates a session record for an agent connection.
+  Returns {:ok, session} with the session ID for later disconnection tracking.
+  """
+  def start_agent_session(agent_db_id, fleet_id, ip_address \\ nil) do
+    AgentSession.start_session(agent_db_id, fleet_id, ip_address)
+  end
+
+  @doc """
+  Ends an agent session by recording disconnect time and reason.
+  """
+  def end_agent_session(session_id, reason \\ "normal") do
+    AgentSession.end_session(session_id, reason)
+  end
+
+  @doc """
+  Lists recent sessions for an agent.
+  """
+  def list_agent_sessions(agent_db_id, limit \\ 50) do
+    AgentSession.list_sessions(agent_db_id, limit)
+  end
+
+  # --- Agent Migration ---
+
+  @doc """
+  Migrates an agent to a different fleet within the same tenant.
+  Returns {:ok, updated_agent} or {:error, reason}.
+  """
+  def migrate_agent(agent_id, target_fleet_id) when is_binary(agent_id) and is_binary(target_fleet_id) do
+    with {:ok, agent} <- find_agent(agent_id),
+         {:ok, target_fleet} <- find_fleet(target_fleet_id),
+         true <- agent.tenant_id == target_fleet.tenant_id || {:error, :cross_tenant},
+         true <- agent.fleet_id != target_fleet_id || {:error, :same_fleet} do
+
+      # Check name uniqueness in target fleet
+      name_conflict =
+        if agent.name do
+          Repo.one(from a in Agent,
+            where: a.name == ^agent.name and a.fleet_id == ^target_fleet_id,
+            limit: 1
+          )
+        end
+
+      if name_conflict do
+        {:error, :name_conflict}
+      else
+        agent
+        |> Agent.changeset(%{fleet_id: target_fleet_id})
+        |> Repo.update()
+      end
+    else
+      {:error, reason} -> {:error, reason}
+      false -> {:error, :cross_tenant}
+    end
+  end
+
+  defp find_fleet(fleet_id) do
+    case Repo.get(Fleet, fleet_id) do
+      nil -> {:error, :fleet_not_found}
+      fleet -> {:ok, fleet}
+    end
   end
 
   # --- Helpers ---
