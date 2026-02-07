@@ -59,6 +59,7 @@ defmodule Hub.Live.DashboardLive do
           editing_fleet_name: false,
           show_all_agents: false,
           registered_agents: [],
+          active_keys: [],
           authenticated: true
         )
 
@@ -73,8 +74,9 @@ defmodule Hub.Live.DashboardLive do
         activities = load_recent_activities(fleet_id)
         usage = load_usage(tenant_id)
         registered = load_registered_agents(tenant_id)
+        active_keys = load_active_keys(tenant_id)
 
-        {:ok, assign(socket, agents: agents, activities: activities, usage: usage, registered_agents: registered)}
+        {:ok, assign(socket, agents: agents, activities: activities, usage: usage, registered_agents: registered, active_keys: active_keys)}
 
       {:error, :unauthenticated} ->
         # Read error/tab from URL params (set by SessionController redirect)
@@ -379,6 +381,51 @@ defmodule Hub.Live.DashboardLive do
 
   def handle_event("dismiss_new_key", _, socket) do
     {:noreply, assign(socket, new_api_key: nil, new_api_key_type: nil)}
+  end
+
+  # Generate a new key (without revoking existing ones)
+  def handle_event("generate_key", %{"type" => type}, socket) when type in ["live", "test", "admin"] do
+    tenant_id = socket.assigns.tenant_id
+    fleet_id = socket.assigns.fleet_id
+
+    case Hub.Auth.generate_api_key(type, tenant_id, fleet_id) do
+      {:ok, raw_key, _api_key} ->
+        Process.send_after(self(), :clear_toast, 8_000)
+        {:noreply, assign(socket,
+          toast: {:success, "New #{type} key generated"},
+          new_api_key: raw_key,
+          new_api_key_type: type,
+          active_keys: load_active_keys(tenant_id)
+        )}
+      {:error, _} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Failed to generate key"})}
+    end
+  end
+
+  def handle_event("generate_key", _, socket) do
+    {:noreply, assign(socket, toast: {:error, "Invalid key type"})}
+  end
+
+  # Revoke a single key by ID
+  def handle_event("revoke_key", %{"id" => key_id}, socket) do
+    import Ecto.Query
+    tenant_id = socket.assigns.tenant_id
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {count, _} = from(k in Hub.Auth.ApiKey,
+      where: k.id == ^key_id and k.tenant_id == ^tenant_id and is_nil(k.revoked_at)
+    ) |> Hub.Repo.update_all(set: [revoked_at: now])
+
+    if count > 0 do
+      Process.send_after(self(), :clear_toast, 4_000)
+      {:noreply, assign(socket,
+        toast: {:success, "Key revoked"},
+        active_keys: load_active_keys(tenant_id)
+      )}
+    else
+      {:noreply, assign(socket, toast: {:error, "Key not found"})}
+    end
   end
 
   # ── Agent: Kick / Disconnect ───────────────────────────────
@@ -1525,8 +1572,12 @@ defmodule Hub.Live.DashboardLive do
         <%!-- API Keys --%>
         <.card class="bg-zinc-900 border-zinc-800 mb-4">
           <.card_header class="pb-2">
-            <.card_title class="text-sm font-medium text-zinc-300">API Keys</.card_title>
-            <.card_description>Rotate keys to revoke all existing keys of that type and generate a new one</.card_description>
+            <div class="flex items-center justify-between">
+              <div>
+                <.card_title class="text-sm font-medium text-zinc-300">API Keys</.card_title>
+                <.card_description>Manage keys for agent connections and admin access</.card_description>
+              </div>
+            </div>
           </.card_header>
           <.card_content>
             <%!-- New key alert --%>
@@ -1548,26 +1599,107 @@ defmodule Hub.Live.DashboardLive do
               </div>
             <% end %>
 
-            <div class="space-y-2">
-              <%= for {type, desc, color} <- [{"live", "Agent connections", "green"}, {"test", "Testing & development", "blue"}, {"admin", "Dashboard & admin API", "amber"}] do %>
-                <div class="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-zinc-800/50 transition-colors">
-                  <div class="flex items-center gap-3">
-                    <div class={"w-2 h-2 rounded-full bg-#{color}-400"}></div>
-                    <div>
-                      <div class="text-xs font-medium text-zinc-200 capitalize"><%= type %></div>
-                      <div class="text-[10px] text-zinc-600"><%= desc %></div>
+            <%!-- Active keys table --%>
+            <div class="mb-4">
+              <div class="text-[10px] text-zinc-500 uppercase tracking-wider mb-2 font-medium">Active Keys</div>
+              <%= if Enum.empty?(@active_keys) do %>
+                <div class="text-xs text-zinc-600 py-3 text-center">No active keys</div>
+              <% else %>
+                <div class="space-y-1">
+                  <%= for key <- @active_keys do %>
+                    <div class="flex items-center justify-between py-2 px-3 rounded-lg bg-zinc-800/30 hover:bg-zinc-800/50 transition-colors group">
+                      <div class="flex items-center gap-3 min-w-0">
+                        <div class={"w-2 h-2 rounded-full flex-shrink-0 " <> key_color(key.type)}></div>
+                        <div class="min-w-0">
+                          <div class="flex items-center gap-2">
+                            <span class="text-xs font-medium text-zinc-200 capitalize"><%= key.type %></span>
+                            <code class="text-[10px] text-zinc-500 font-mono"><%= key.key_prefix %>•••</code>
+                          </div>
+                          <div class="text-[10px] text-zinc-600">
+                            Created <%= format_date(key.inserted_at) %>
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        phx-click="revoke_key"
+                        phx-value-id={key.id}
+                        data-confirm={"Revoke this #{key.type} key? This cannot be undone."}
+                        class="text-[10px] text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all px-2 py-1 rounded border border-transparent hover:border-red-500/20"
+                      >
+                        Revoke
+                      </button>
                     </div>
+                  <% end %>
+                </div>
+              <% end %>
+            </div>
+
+            <%!-- Generate new keys --%>
+            <div>
+              <div class="text-[10px] text-zinc-500 uppercase tracking-wider mb-2 font-medium">Generate New Key</div>
+              <div class="space-y-1.5">
+                <%= for {type, desc, icon} <- [{"live", "For agent WebSocket connections", :zap}, {"test", "For testing & development", :code}, {"admin", "For dashboard & admin API", :settings}] do %>
+                  <% has_key = Enum.any?(@active_keys, &(&1.type == type)) %>
+                  <div class="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-zinc-800/50 transition-colors">
+                    <div class="flex items-center gap-3">
+                      <div class={"w-2 h-2 rounded-full " <> key_color(type)}></div>
+                      <div>
+                        <div class="text-xs font-medium text-zinc-200 capitalize"><%= type %></div>
+                        <div class="text-[10px] text-zinc-600"><%= desc %></div>
+                      </div>
+                    </div>
+                    <.button
+                      variant="outline"
+                      size="sm"
+                      phx-click="generate_key"
+                      phx-value-type={type}
+                      class={"h-7 text-[10px] border-zinc-700 " <> if(has_key, do: "text-zinc-500 hover:text-zinc-300", else: "text-amber-400 border-amber-500/30 hover:bg-amber-500/10")}
+                    >
+                      <%= if has_key, do: "Add Another", else: "Generate" %>
+                    </.button>
                   </div>
-                  <.button
-                    variant="outline"
-                    size="sm"
-                    phx-click="rotate_api_key"
-                    phx-value-type={type}
-                    data-confirm={"Rotate #{type} key? All existing #{type} keys will be revoked."}
-                    class="h-7 text-[10px] border-zinc-700 text-zinc-400 hover:text-amber-400 hover:border-amber-500/30"
-                  >
-                    Rotate
-                  </.button>
+                <% end %>
+              </div>
+            </div>
+          </.card_content>
+        </.card>
+
+        <%!-- Connect Agents Guide --%>
+        <.card class="bg-zinc-900 border-zinc-800 mb-4">
+          <.card_header class="pb-2">
+            <.card_title class="text-sm font-medium text-zinc-300">Connect Agents</.card_title>
+            <.card_description>Use a live API key to connect agents to your fleet</.card_description>
+          </.card_header>
+          <.card_content>
+            <div class="space-y-3">
+              <div>
+                <div class="text-[10px] text-zinc-500 uppercase tracking-wider mb-1.5 font-medium">OpenClaw Plugin</div>
+                <div class="bg-zinc-950 rounded-lg p-3 text-[11px] font-mono text-zinc-300 overflow-x-auto">
+                  <div class="text-zinc-600"># Add to your openclaw.yaml</div>
+                  <div><span class="text-amber-400">ringforge</span>:</div>
+                  <div class="pl-4"><span class="text-zinc-500">enabled</span>: <span class="text-green-400">true</span></div>
+                  <div class="pl-4"><span class="text-zinc-500">server</span>: <span class="text-cyan-400">"wss://ringforge.wejoona.com"</span></div>
+                  <div class="pl-4"><span class="text-zinc-500">apiKey</span>: <span class="text-cyan-400">"YOUR_LIVE_KEY"</span></div>
+                  <div class="pl-4"><span class="text-zinc-500">fleetId</span>: <span class="text-cyan-400">"<%= @fleet_id %>"</span></div>
+                  <div class="pl-4"><span class="text-zinc-500">agentName</span>: <span class="text-cyan-400">"My Agent"</span></div>
+                  <div class="pl-4"><span class="text-zinc-500">capabilities</span>: <span class="text-cyan-400">["code", "research"]</span></div>
+                </div>
+              </div>
+              <div>
+                <div class="text-[10px] text-zinc-500 uppercase tracking-wider mb-1.5 font-medium">WebSocket Direct</div>
+                <div class="bg-zinc-950 rounded-lg p-3 text-[11px] font-mono text-zinc-300 overflow-x-auto">
+                  <div class="text-zinc-600"># Connect to</div>
+                  <div>wss://ringforge.wejoona.com/ws</div>
+                  <div class="text-zinc-600 mt-1"># Auth params</div>
+                  <div class="text-zinc-500">api_key: <span class="text-cyan-400">YOUR_LIVE_KEY</span></div>
+                  <div class="text-zinc-500">agent: <span class="text-cyan-400"><%= ~s|{"name": "...", "capabilities": [...]}| %></span></div>
+                </div>
+              </div>
+              <% live_keys = Enum.filter(@active_keys, &(&1.type == "live")) %>
+              <%= if Enum.empty?(live_keys) do %>
+                <div class="flex items-center gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg py-2.5 px-3">
+                  <Icons.alert_triangle class="w-4 h-4 flex-shrink-0" />
+                  <span>No live key yet — generate one above to connect agents</span>
                 </div>
               <% end %>
             </div>
@@ -1686,6 +1818,27 @@ defmodule Hub.Live.DashboardLive do
   end
 
   defp load_usage(tenant_id), do: Hub.Quota.get_usage(tenant_id)
+
+  defp load_active_keys(tenant_id) do
+    import Ecto.Query
+    from(k in Hub.Auth.ApiKey,
+      where: k.tenant_id == ^tenant_id and is_nil(k.revoked_at),
+      order_by: [asc: k.type, desc: k.inserted_at]
+    ) |> Hub.Repo.all()
+  end
+
+  defp key_color("live"), do: "bg-green-400"
+  defp key_color("test"), do: "bg-blue-400"
+  defp key_color("admin"), do: "bg-amber-400"
+  defp key_color(_), do: "bg-zinc-400"
+
+  defp format_date(%NaiveDateTime{} = dt) do
+    Calendar.strftime(dt, "%b %d, %Y %H:%M")
+  end
+  defp format_date(%DateTime{} = dt) do
+    Calendar.strftime(dt, "%b %d, %Y %H:%M")
+  end
+  defp format_date(_), do: "—"
 
   defp load_registered_agents(tenant_id) do
     import Ecto.Query
