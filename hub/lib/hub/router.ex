@@ -44,7 +44,7 @@ defmodule Hub.Router do
   end
 
   scope "/", Hub do
-    pipe_through :metrics
+    pipe_through [:metrics, :admin_auth]
     get "/metrics", MetricsController, :index
   end
 

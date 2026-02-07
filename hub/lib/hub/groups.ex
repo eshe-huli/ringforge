@@ -90,6 +90,19 @@ defmodule Hub.Groups do
     end
   end
 
+  def member_role(group_id, agent_id) do
+    case get_group(group_id) do
+      {:ok, group} ->
+        case Repo.one(from m in GroupMember, where: m.group_id == ^group.id and m.agent_id == ^agent_id, select: m.role) do
+          nil -> {:error, :not_member}
+          role -> {:ok, role}
+        end
+
+      error ->
+        error
+    end
+  end
+
   def is_member?(group_id, agent_id) do
     case get_group(group_id) do
       {:ok, group} ->

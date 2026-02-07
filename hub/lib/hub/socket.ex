@@ -37,26 +37,61 @@ defmodule Hub.Socket do
     end
   end
 
-  def connect(%{"agent_id" => agent_id}, socket, _connect_info) do
-    case Hub.Auth.find_agent(agent_id) do
-      {:ok, agent} ->
-        Hub.Auth.touch_agent(agent)
-        Logger.info("Agent reconnected: #{agent.agent_id}")
+  def connect(%{"agent_id" => agent_id, "api_key" => raw_key}, socket, _connect_info) do
+    # Reconnect requires both agent_id AND a valid API key for the same tenant
+    with {:ok, api_key} <- Hub.Auth.validate_api_key(raw_key),
+         {:ok, agent} <- Hub.Auth.find_agent(agent_id),
+         true <- agent.tenant_id == api_key.tenant_id do
+      Hub.Auth.touch_agent(agent)
+      Logger.info("Agent reconnected (key-verified): #{agent.agent_id}")
 
-        socket =
-          socket
-          |> assign(:tenant_id, agent.tenant_id)
-          |> assign(:fleet_id, agent.fleet_id)
-          |> assign(:agent_id, agent.agent_id)
-          |> assign(:agent_db_id, agent.id)
-          |> assign(:auth_mode, :reconnect)
+      socket =
+        socket
+        |> assign(:tenant_id, agent.tenant_id)
+        |> assign(:fleet_id, agent.fleet_id)
+        |> assign(:agent_id, agent.agent_id)
+        |> assign(:agent_db_id, agent.id)
+        |> assign(:auth_mode, :reconnect)
 
-        {:ok, socket}
+      {:ok, socket}
+    else
+      false ->
+        Logger.warning("Socket auth failed (reconnect): tenant mismatch for #{agent_id}")
+        :error
 
-      {:error, _} ->
-        Logger.warning("Socket auth failed (reconnect): unknown agent_id #{agent_id}")
+      {:error, reason} ->
+        Logger.warning("Socket auth failed (reconnect): #{inspect(reason)} for #{agent_id}")
         :error
     end
+  end
+
+  def connect(%{"agent_id" => agent_id, "challenge_response" => sig, "challenge" => challenge}, socket, _connect_info) do
+    # Reconnect via Ed25519 challenge-response (for agents with public keys)
+    with {:ok, agent} <- Hub.Auth.find_agent(agent_id),
+         :ok <- Hub.Auth.verify_challenge(agent, challenge, sig) do
+      Hub.Auth.touch_agent(agent)
+      Logger.info("Agent reconnected (challenge-verified): #{agent.agent_id}")
+
+      socket =
+        socket
+        |> assign(:tenant_id, agent.tenant_id)
+        |> assign(:fleet_id, agent.fleet_id)
+        |> assign(:agent_id, agent.agent_id)
+        |> assign(:agent_db_id, agent.id)
+        |> assign(:auth_mode, :reconnect)
+
+      {:ok, socket}
+    else
+      {:error, reason} ->
+        Logger.warning("Socket auth failed (challenge): #{inspect(reason)} for #{agent_id}")
+        :error
+    end
+  end
+
+  def connect(%{"agent_id" => _agent_id}, _socket, _connect_info) do
+    # Reject bare agent_id reconnect without authentication
+    Logger.warning("Socket auth failed: agent_id reconnect requires api_key or challenge_response")
+    :error
   end
 
   # Fallback: reject unauthenticated connections

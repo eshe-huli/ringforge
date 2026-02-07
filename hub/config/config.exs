@@ -2,11 +2,11 @@ import Config
 
 config :hub, Hub.Endpoint,
   url: [host: "localhost"],
-  http: [port: 4000],
+  http: [ip: {0, 0, 0, 0}, port: 4000],
   server: true,
   adapter: Bandit.PhoenixAdapter,
   pubsub_server: Hub.PubSub,
-  secret_key_base: "Rk9SZ0VfSFVCX1NFQ1JFVF9LRVlfQkFTRV82NF9CWVRFU19NSU5JTVVNXw==+ringforge_dev_only",
+  secret_key_base: System.get_env("SECRET_KEY_BASE", :crypto.strong_rand_bytes(64) |> Base.encode64()),
   live_view: [signing_salt: "ringforge_lv_salt"]
 
 config :hub,
@@ -15,7 +15,7 @@ config :hub,
       strategy: Cluster.Strategy.Gossip,
       config: [
         port: 45892,
-        if_addr: "0.0.0.0",
+        if_addr: "127.0.0.1",
         multicast_addr: "230.1.1.251",
         multicast_ttl: 1
       ]
@@ -31,7 +31,7 @@ config :phoenix, :json_library, Jason
 # Ecto / Postgres
 config :hub, Hub.Repo,
   username: "sentinel",
-  password: "sentinel_secret",
+  password: System.get_env("DB_PASSWORD", "sentinel_secret"),
   hostname: "localhost",
   port: 5432,
   database: "ringforge_dev",

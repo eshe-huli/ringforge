@@ -804,22 +804,33 @@ defmodule Hub.FleetChannel do
   def handle_in("group:dissolve", %{"payload" => payload}, socket) do
     group_id = payload["group_id"]
     result = payload["result"]
+    agent_id = socket.assigns.agent_id
 
-    case Hub.Groups.dissolve_group(group_id, result) do
-      {:ok, _group} ->
-        broadcast!(socket, "group:dissolved", %{
-          "type" => "group", "event" => "dissolved",
-          "payload" => %{
-            "group_id" => group_id,
-            "result" => result,
-            "dissolved_by" => socket.assigns.agent_id
-          }
-        })
+    # Only group owner can dissolve
+    case Hub.Groups.member_role(group_id, agent_id) do
+      {:ok, "owner"} ->
+        case Hub.Groups.dissolve_group(group_id, result) do
+          {:ok, _group} ->
+            broadcast!(socket, "group:dissolved", %{
+              "type" => "group", "event" => "dissolved",
+              "payload" => %{
+                "group_id" => group_id,
+                "result" => result,
+                "dissolved_by" => agent_id
+              }
+            })
 
-        {:reply, {:ok, %{dissolved: true, group_id: group_id}}, socket}
+            {:reply, {:ok, %{dissolved: true, group_id: group_id}}, socket}
 
-      {:error, reason} ->
-        {:reply, {:error, %{message: inspect(reason)}}, socket}
+          {:error, reason} ->
+            {:reply, {:error, %{message: inspect(reason)}}, socket}
+        end
+
+      {:ok, _role} ->
+        {:reply, {:error, %{reason: "forbidden", message: "Only the group owner can dissolve a group."}}, socket}
+
+      {:error, _} ->
+        {:reply, {:error, %{reason: "not_member", message: "You are not a member of this group."}}, socket}
     end
   end
 
