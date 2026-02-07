@@ -29,12 +29,13 @@ defmodule Hub.Live.DashboardLive do
   @impl true
   def mount(params, session, socket) do
     case authenticate(params, session) do
-      {:ok, tenant_id, fleet_id, fleet_name, plan} ->
+      {:ok, tenant_id, fleet_id, fleet_name, plan, tenant_email} ->
         socket = assign(socket,
           tenant_id: tenant_id,
           fleet_id: fleet_id,
           fleet_name: fleet_name,
           plan: plan,
+          tenant_email: tenant_email,
           agents: %{},
           activities: [],
           usage: %{},
@@ -101,10 +102,11 @@ defmodule Hub.Live.DashboardLive do
   @impl true
   def handle_event("authenticate", %{"key" => key}, socket) do
     case validate_admin_key(key) do
-      {:ok, tenant_id, fleet_id, fleet_name, plan} ->
+      {:ok, tenant_id, fleet_id, fleet_name, plan, tenant_email} ->
         registered = load_registered_agents(tenant_id)
         socket = assign(socket,
           tenant_id: tenant_id, fleet_id: fleet_id, fleet_name: fleet_name, plan: plan,
+          tenant_email: tenant_email,
           agents: load_agents(fleet_id),
           activities: load_recent_activities(fleet_id),
           usage: load_usage(tenant_id),
@@ -135,6 +137,25 @@ defmodule Hub.Live.DashboardLive do
   # Auth tab switching
   def handle_event("switch_auth_tab", %{"tab" => tab}, socket) do
     {:noreply, assign(socket, auth_tab: tab, auth_error: nil)}
+  end
+
+  # Claim account — set email/password on existing tenant
+  def handle_event("claim_account", %{"email" => email, "password" => password}, socket) do
+    tenant = Hub.Repo.get(Hub.Auth.Tenant, socket.assigns.tenant_id)
+
+    case Hub.Auth.Tenant.registration_changeset(tenant, %{name: tenant.name, email: email, password: password})
+         |> Hub.Repo.update() do
+      {:ok, updated} ->
+        {:noreply, assign(socket,
+          tenant_email: updated.email,
+          toast: {:success, "Account claimed — you can now sign in with #{email}"}
+        )}
+
+      {:error, changeset} ->
+        error = Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
+                |> Enum.map_join(". ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
+        {:noreply, assign(socket, toast: {:error, error})}
+    end
   end
 
   # Navigation
@@ -1450,6 +1471,71 @@ defmodule Hub.Live.DashboardLive do
           </.card_content>
         </.card>
 
+        <%!-- Claim Account (only if no email set) --%>
+        <%= unless @tenant_email do %>
+          <.card class="bg-zinc-900 border-amber-500/30 mb-4 animate-fade-in">
+            <.card_header class="pb-2">
+              <div class="flex items-center gap-2">
+                <div class="w-8 h-8 rounded-lg bg-amber-500/15 flex items-center justify-center">
+                  <Icons.user_plus class="w-4 h-4 text-amber-400" />
+                </div>
+                <div>
+                  <.card_title class="text-sm font-medium text-zinc-300">Set Up Login</.card_title>
+                  <.card_description class="text-[11px]">Add email & password so you can sign in without an API key</.card_description>
+                </div>
+              </div>
+            </.card_header>
+            <.card_content>
+              <form phx-submit="claim_account" class="space-y-3">
+                <div>
+                  <label class="text-[11px] text-zinc-400 mb-1 block font-medium">Email</label>
+                  <.input
+                    type="email"
+                    name="email"
+                    placeholder="you@example.com"
+                    autocomplete="email"
+                    required
+                    class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50 h-9 text-xs"
+                  />
+                </div>
+                <div>
+                  <label class="text-[11px] text-zinc-400 mb-1 block font-medium">Password</label>
+                  <.input
+                    type="password"
+                    name="password"
+                    placeholder="Min. 8 characters"
+                    autocomplete="new-password"
+                    required
+                    minlength="8"
+                    class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50 h-9 text-xs"
+                  />
+                </div>
+                <.button
+                  type="submit"
+                  class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold h-9 text-xs"
+                >
+                  Claim Account
+                </.button>
+              </form>
+            </.card_content>
+          </.card>
+        <% end %>
+
+        <%!-- Account info (when email is set) --%>
+        <%= if @tenant_email do %>
+          <.card class="bg-zinc-900 border-zinc-800 mb-4">
+            <.card_header class="pb-2">
+              <.card_title class="text-sm font-medium text-zinc-300">Account</.card_title>
+            </.card_header>
+            <.card_content>
+              <div class="flex items-center justify-between py-2 text-xs">
+                <span class="text-zinc-500">Email</span>
+                <span class="text-zinc-300 font-mono text-[11px]"><%= @tenant_email %></span>
+              </div>
+            </.card_content>
+          </.card>
+        <% end %>
+
         <%!-- API Keys --%>
         <.card class="bg-zinc-900 border-zinc-800 mb-4">
           <.card_header class="pb-2">
@@ -1560,7 +1646,8 @@ defmodule Hub.Live.DashboardLive do
         fleet = load_default_fleet(tenant_id)
         tenant = Hub.Repo.get(Hub.Auth.Tenant, tenant_id)
         plan = if(tenant, do: tenant.plan || "free", else: "free")
-        if fleet, do: {:ok, tenant_id, fleet.id, fleet.name, plan}, else: {:error, :unauthenticated}
+        email = if(tenant, do: tenant.email, else: nil)
+        if fleet, do: {:ok, tenant_id, fleet.id, fleet.name, plan, email}, else: {:error, :unauthenticated}
       true -> {:error, :unauthenticated}
     end
   end
@@ -1571,7 +1658,8 @@ defmodule Hub.Live.DashboardLive do
         fleet = load_default_fleet(tenant_id)
         tenant = Hub.Repo.get(Hub.Auth.Tenant, tenant_id)
         plan = if(tenant, do: tenant.plan || "free", else: "free")
-        if fleet, do: {:ok, tenant_id, fleet.id, fleet.name, plan}, else: {:error, :no_fleet}
+        email = if(tenant, do: tenant.email, else: nil)
+        if fleet, do: {:ok, tenant_id, fleet.id, fleet.name, plan, email}, else: {:error, :no_fleet}
       {:ok, _} -> {:error, :not_admin}
       {:error, reason} -> {:error, reason}
     end
