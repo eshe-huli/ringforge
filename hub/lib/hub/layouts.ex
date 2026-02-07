@@ -14,8 +14,8 @@ defmodule Hub.Layouts do
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="csrf-token" content={Plug.CSRFProtection.get_csrf_token()} />
         <title>RingForge — Agent Coordination Mesh</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <script>
+        <script data-cfasync="false" src="https://cdn.tailwindcss.com"></script>
+        <script data-cfasync="false">
           tailwind.config = {
             darkMode: 'class',
             theme: {
@@ -228,9 +228,9 @@ defmodule Hub.Layouts do
       </head>
       <body class="h-full font-mono antialiased">
         <%= @inner_content %>
-        <script src="https://cdn.jsdelivr.net/npm/phoenix@1.7.21/priv/static/phoenix.min.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/phoenix_live_view@1.1.22/priv/static/phoenix_live_view.min.js"></script>
-        <script>
+        <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/phoenix@1.7.21/priv/static/phoenix.min.js"></script>
+        <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/phoenix_live_view@1.1.22/priv/static/phoenix_live_view.min.js"></script>
+        <script data-cfasync="false">
           let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
           let liveSocket = new window.LiveView.LiveSocket("/live", window.Phoenix.Socket, {
             params: { _csrf_token: csrfToken }
