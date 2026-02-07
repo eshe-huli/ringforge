@@ -52,7 +52,7 @@ function pushChannel(topic, event, payload = {}) {
 }
 
 function connect() {
-  const wsUrl = `${config.url}/ws/websocket?api_key=${encodeURIComponent(config.apiKey)}&agent=${encodeURIComponent(JSON.stringify({
+  const wsUrl = `${config.url}/ws/websocket?vsn=2.0.0&api_key=${encodeURIComponent(config.apiKey)}&agent=${encodeURIComponent(JSON.stringify({
     name: config.name,
     framework: config.framework,
     capabilities: config.capabilities,
