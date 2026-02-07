@@ -666,6 +666,183 @@ defmodule Hub.FleetChannel do
     handle_in("replay:request", %{"payload" => %{}}, socket)
   end
 
+  # ── Groups ──────────────────────────────────────────────────
+
+  def handle_in("group:create", %{"payload" => payload}, socket) do
+    attrs = %{
+      name: payload["name"],
+      type: payload["type"] || "squad",
+      fleet_id: socket.assigns.fleet_id,
+      created_by: socket.assigns.agent_id,
+      capabilities: payload["capabilities"] || [],
+      settings: payload["settings"] || %{}
+    }
+
+    case Hub.Groups.create_group(attrs) do
+      {:ok, group} ->
+        # Creator auto-joins as owner
+        Hub.Groups.join_group(group.group_id, socket.assigns.agent_id, "owner")
+
+        # Subscribe creator to group PubSub topic
+        Phoenix.PubSub.subscribe(Hub.PubSub, group_topic(socket, group.group_id))
+
+        # Auto-invite listed agents
+        for agent_id <- payload["invite"] || [] do
+          Hub.Groups.join_group(group.group_id, agent_id, "member")
+          # Notify invited agents
+          Phoenix.PubSub.broadcast(
+            Hub.PubSub,
+            "fleet:#{socket.assigns.fleet_id}:agent:#{agent_id}",
+            {:group_invite, %{group_id: group.group_id, name: group.name, type: group.type, invited_by: socket.assigns.agent_id}}
+          )
+        end
+
+        # Broadcast to fleet
+        broadcast!(socket, "group:created", %{
+          "type" => "group", "event" => "created",
+          "payload" => group_json(group)
+        })
+
+        {:reply, {:ok, group_json(group)}, socket}
+
+      {:error, changeset} ->
+        {:reply, {:error, %{message: "Failed to create group", details: inspect(changeset.errors)}}, socket}
+    end
+  end
+
+  def handle_in("group:join", %{"payload" => %{"group_id" => group_id}}, socket) do
+    agent_id = socket.assigns.agent_id
+
+    case Hub.Groups.join_group(group_id, agent_id) do
+      {:ok, _member} ->
+        Phoenix.PubSub.subscribe(Hub.PubSub, group_topic(socket, group_id))
+
+        broadcast!(socket, "group:member_joined", %{
+          "type" => "group", "event" => "member_joined",
+          "payload" => %{"group_id" => group_id, "agent_id" => agent_id}
+        })
+
+        {:reply, {:ok, %{joined: true, group_id: group_id}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{message: "Failed to join group", reason: inspect(reason)}}, socket}
+    end
+  end
+
+  def handle_in("group:leave", %{"payload" => %{"group_id" => group_id}}, socket) do
+    agent_id = socket.assigns.agent_id
+
+    case Hub.Groups.leave_group(group_id, agent_id) do
+      {:ok, _} ->
+        Phoenix.PubSub.unsubscribe(Hub.PubSub, group_topic(socket, group_id))
+
+        broadcast!(socket, "group:member_left", %{
+          "type" => "group", "event" => "member_left",
+          "payload" => %{"group_id" => group_id, "agent_id" => agent_id}
+        })
+
+        {:reply, {:ok, %{left: true, group_id: group_id}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{message: inspect(reason)}}, socket}
+    end
+  end
+
+  def handle_in("group:message", %{"payload" => payload}, socket) do
+    group_id = payload["group_id"]
+    agent_id = socket.assigns.agent_id
+
+    if Hub.Groups.is_member?(group_id, agent_id) do
+      # Increment message quota
+      Hub.Quota.increment(socket.assigns.tenant_id, :messages)
+
+      envelope = %{
+        "type" => "group", "event" => "message",
+        "payload" => %{
+          "group_id" => group_id,
+          "from" => %{"agent_id" => agent_id, "name" => get_agent_name(socket)},
+          "message" => payload["message"] || payload,
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        }
+      }
+
+      # Broadcast to group topic — only members subscribed will receive
+      Phoenix.PubSub.broadcast(Hub.PubSub, group_topic(socket, group_id), {:group_message, envelope})
+
+      {:reply, {:ok, %{sent: true}}, socket}
+    else
+      {:reply, {:error, %{message: "Not a member of this group"}}, socket}
+    end
+  end
+
+  def handle_in("group:list", %{"payload" => payload}, socket) do
+    opts = [
+      status: payload["status"] || "active",
+      type: payload["type"]
+    ]
+
+    groups = Hub.Groups.list_groups(socket.assigns.fleet_id, opts)
+    {:reply, {:ok, %{groups: Enum.map(groups, &group_json/1)}}, socket}
+  end
+
+  def handle_in("group:list", _payload, socket) do
+    handle_in("group:list", %{"payload" => %{}}, socket)
+  end
+
+  def handle_in("group:members", %{"payload" => %{"group_id" => group_id}}, socket) do
+    case Hub.Groups.members(group_id) do
+      {:ok, members} ->
+        {:reply, {:ok, %{members: Enum.map(members, fn m ->
+          %{agent_id: m.agent_id, role: m.role, joined_at: m.joined_at}
+        end)}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{message: inspect(reason)}}, socket}
+    end
+  end
+
+  def handle_in("group:dissolve", %{"payload" => payload}, socket) do
+    group_id = payload["group_id"]
+    result = payload["result"]
+
+    case Hub.Groups.dissolve_group(group_id, result) do
+      {:ok, _group} ->
+        broadcast!(socket, "group:dissolved", %{
+          "type" => "group", "event" => "dissolved",
+          "payload" => %{
+            "group_id" => group_id,
+            "result" => result,
+            "dissolved_by" => socket.assigns.agent_id
+          }
+        })
+
+        {:reply, {:ok, %{dissolved: true, group_id: group_id}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{message: inspect(reason)}}, socket}
+    end
+  end
+
+  def handle_in("group:my_groups", _payload, socket) do
+    groups = Hub.Groups.groups_for_agent(socket.assigns.agent_id, socket.assigns.fleet_id)
+    {:reply, {:ok, %{groups: Enum.map(groups, &group_json/1)}}, socket}
+  end
+
+  # Handle incoming group messages from PubSub
+  @impl true
+  def handle_info({:group_message, envelope}, socket) do
+    push(socket, "group:message", envelope)
+    {:noreply, socket}
+  end
+
+  def handle_info({:group_invite, invite}, socket) do
+    push(socket, "group:invite", %{
+      "type" => "group", "event" => "invite",
+      "payload" => invite
+    })
+    {:noreply, socket}
+  end
+
   # ── Terminate — cleanup on disconnect ──────────────────────
 
   @impl true
@@ -754,6 +931,24 @@ defmodule Hub.FleetChannel do
 
   defp validated_state(state) when state in @valid_states, do: state
   defp validated_state(_), do: "online"
+
+  defp group_topic(socket, group_id) do
+    "fleet:#{socket.assigns.fleet_id}:group:#{group_id}"
+  end
+
+  defp group_json(group) do
+    %{
+      group_id: group.group_id,
+      name: group.name,
+      type: group.type,
+      capabilities: group.capabilities,
+      status: group.status,
+      created_by: group.created_by,
+      member_count: length(group.members || []),
+      settings: group.settings,
+      inserted_at: group.inserted_at
+    }
+  end
 
   defp get_current_meta(socket) do
     case FleetPresence.get_by_key(socket, socket.assigns.agent_id) do

@@ -437,6 +437,58 @@ function onJoined(topic, response) {
         }
         break;
 
+      // ── Groups ──
+      case "group": {
+        const sub = args[0];
+        switch (sub) {
+          case "create": {
+            const gName = args[1];
+            const gType = args[2] || "squad";
+            if (!gName) { console.log("Usage: group create <name> [squad|pod|channel]"); break; }
+            pushChannel(topic, "group:create", { payload: { name: gName, type: gType, capabilities: [], invite: [] } });
+            console.log(`→ Creating ${gType}: ${gName}`);
+            break;
+          }
+          case "join": {
+            if (!args[1]) { console.log("Usage: group join <group_id>"); break; }
+            pushChannel(topic, "group:join", { payload: { group_id: args[1] } });
+            console.log(`→ Joining ${args[1]}`);
+            break;
+          }
+          case "leave": {
+            if (!args[1]) { console.log("Usage: group leave <group_id>"); break; }
+            pushChannel(topic, "group:leave", { payload: { group_id: args[1] } });
+            console.log(`→ Leaving ${args[1]}`);
+            break;
+          }
+          case "msg": {
+            const gid = args[1];
+            const gmsg = args.slice(2).join(" ");
+            if (!gid || !gmsg) { console.log("Usage: group msg <group_id> <message>"); break; }
+            pushChannel(topic, "group:message", { payload: { group_id: gid, message: { type: "text", text: gmsg } } });
+            console.log(`→ Group message sent to ${gid}`);
+            break;
+          }
+          case "list":
+            pushChannel(topic, "group:list", { payload: {} });
+            console.log("→ Listing groups...");
+            break;
+          case "mine":
+            pushChannel(topic, "group:my_groups", {});
+            console.log("→ Listing my groups...");
+            break;
+          case "dissolve": {
+            if (!args[1]) { console.log("Usage: group dissolve <group_id> [result]"); break; }
+            pushChannel(topic, "group:dissolve", { payload: { group_id: args[1], result: args.slice(2).join(" ") || null } });
+            console.log(`→ Dissolving ${args[1]}`);
+            break;
+          }
+          default:
+            console.log("Usage: group create|join|leave|msg|list|mine|dissolve <args>");
+        }
+        break;
+      }
+
       case "quit":
       case "exit":
         console.log("👋 Disconnecting...");
@@ -444,7 +496,7 @@ function onJoined(topic, response) {
         process.exit(0);
 
       default:
-        console.log(`Unknown command: ${cmd}. Try: dm, ask, assign, status, data, send, roster, busy, activity, memory, quit`);
+        console.log(`Unknown: ${cmd}. Try: dm, ask, assign, status, data, send, roster, group, busy, activity, memory, quit`);
     }
 
     rl.prompt();
