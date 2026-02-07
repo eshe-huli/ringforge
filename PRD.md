@@ -20,6 +20,8 @@
 8. [Multi-Tenancy Design](#8-multi-tenancy-design)
 9. [Client SDKs](#9-client-sdks)
 10. [Security](#10-security)
+    - [5.9 DM → Agent Turn Injection](#59-dm--agent-turn-injection)
+    - [5.10 Groups & Squads](#510-groups--squads)
 11. [Pricing Model](#11-pricing-model)
 12. [Competitive Analysis](#12-competitive-analysis)
 13. [Roadmap](#13-roadmap)
@@ -740,6 +742,244 @@ Direct messages support a request/response pattern with correlation IDs:
   }
 }
 ```
+
+### 5.9 DM → Agent Turn Injection
+
+#### 5.9.1 Problem
+
+Direct messages that arrive at an agent's WebSocket connection are useless unless they trigger actual agent behavior. A message sitting in a queue that no one reads is dead weight. The mesh must close the loop: when Agent A sends a DM to Agent B, Agent B should **act** on it — not just log it.
+
+#### 5.9.2 Injection Model
+
+When a DM arrives at a connected agent, the client plugin (e.g., the OpenClaw Ringforge plugin) can inject it as a **system event** into the agent's active session. This triggers an agent turn — the LLM processes the message and responds.
+
+**Flow:**
+
+```
+1. Agent A sends DM: {"type": "direct", "to": "ag_B", "payload": {"type": "task_request", "task": "deploy", "description": "Deploy v2.3 to staging"}}
+2. Hub routes DM to Agent B's WebSocket
+3. Agent B's Ringforge plugin receives the DM
+4. Plugin injects system event: "[Ringforge] Task request from Agent A: Deploy v2.3 to staging"
+5. Agent B's LLM processes the event, takes action
+6. Agent B sends result back: {"type": "direct", "to": "ag_A", "payload": {"type": "task_result", "status": "completed"}}
+```
+
+#### 5.9.3 Injection Modes
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `immediate` | Inject as system event, trigger agent turn now | Urgent tasks, real-time coordination |
+| `queue` | Add to inbox, agent checks on next heartbeat/turn | Non-urgent notifications, FYI messages |
+| `interrupt` | Inject mid-turn if agent is busy, with priority flag | Critical alerts, blocking requests |
+
+The injection mode is determined by the message's `priority` field:
+
+```json
+{
+  "type": "direct",
+  "action": "send",
+  "to": "ag_c0d3r",
+  "payload": {
+    "type": "task_request",
+    "priority": "high",
+    "injection": "immediate",
+    "task": "rollback",
+    "description": "Production is down. Rollback last deploy."
+  }
+}
+```
+
+#### 5.9.4 Response Routing
+
+When an agent's LLM generates a response to an injected DM, the plugin automatically routes it back to the sender as a DM reply, using the original `correlation_id` for threading.
+
+#### 5.9.5 Plugin Implementation
+
+The OpenClaw Ringforge plugin implements injection via the `gateway_method` or `hook` system:
+
+- **`message_received` hook**: When a DM arrives, format it as a session system event
+- **`sessions_send`**: Inject into the agent's active session
+- **`after_tool_call` hook**: When agent uses `ringforge_send`, route response back
+
+This makes the mesh transparent to the LLM — it just sees messages arriving and uses tools to respond. The coordination protocol is invisible.
+
+### 5.10 Groups & Squads
+
+#### 5.10.1 Why Groups?
+
+Fleets are organizational boundaries (tenant-level). But within a fleet, agents naturally cluster around roles:
+
+- **Research squad:** 3 agents specialized in web search, paper analysis, summarization
+- **DevOps team:** 2 agents handling deploy, monitoring, incident response
+- **Customer support pod:** 5 agents handling tickets, escalations, knowledge base
+
+Groups enable **scoped coordination** — messages, presence, and memory that only the group sees, without creating separate fleets.
+
+#### 5.10.2 Group Model
+
+```json
+{
+  "id": "grp_devops",
+  "name": "DevOps Squad",
+  "fleet_id": "fl_default",
+  "type": "squad",
+  "members": ["ag_deploy", "ag_monitor", "ag_incident"],
+  "capabilities": ["deploy", "monitoring", "incident-response"],
+  "created_by": "ag_admin",
+  "created_at": "2026-02-06T20:00:00Z",
+  "settings": {
+    "auto_join": false,
+    "max_members": 10,
+    "visibility": "fleet"
+  }
+}
+```
+
+#### 5.10.3 Group Types
+
+| Type | Description | Example |
+|------|-------------|---------|
+| `squad` | Persistent team with fixed membership. Optimized for recurring work. | DevOps squad, Research team |
+| `pod` | Ephemeral group spun up for a specific task. Dissolves when done. | "Investigate outage #42" pod |
+| `channel` | Topic-based group anyone can join/leave. Think Slack channels for agents. | `#deployments`, `#research-ml` |
+
+#### 5.10.4 Group Operations
+
+| Operation | Description |
+|-----------|-------------|
+| `group.create` | Create a new group |
+| `group.join` | Join an existing group |
+| `group.leave` | Leave a group |
+| `group.invite` | Invite an agent to a group |
+| `group.kick` | Remove an agent from a group |
+| `group.dissolve` | Delete the group (pod type auto-dissolves) |
+| `group.list` | List groups in the fleet |
+| `group.members` | List members of a group |
+| `group.update` | Update group settings |
+
+#### 5.10.5 Group Messaging
+
+Groups have their own message channel. Messages sent to a group are delivered to all members.
+
+```json
+// Send to group
+{
+  "type": "group",
+  "action": "message",
+  "group_id": "grp_devops",
+  "payload": {
+    "type": "alert",
+    "description": "CPU at 95% on prod-web-3. Investigating.",
+    "severity": "high"
+  }
+}
+
+// Received by all group members
+{
+  "type": "group",
+  "event": "message",
+  "group_id": "grp_devops",
+  "from": {
+    "agent_id": "ag_monitor",
+    "name": "monitor-agent"
+  },
+  "payload": {
+    "type": "alert",
+    "description": "CPU at 95% on prod-web-3. Investigating.",
+    "severity": "high"
+  }
+}
+```
+
+#### 5.10.6 Group Presence
+
+Each group has its own presence scope. Agents can be `online` in the fleet but `busy` in a specific squad:
+
+```json
+{
+  "type": "group",
+  "action": "presence_update",
+  "group_id": "grp_devops",
+  "state": "busy",
+  "task": "Rolling back prod-web-3"
+}
+```
+
+#### 5.10.7 Group Memory
+
+Groups have private shared memory, scoped to the group. Only members can read/write.
+
+```json
+{
+  "type": "group",
+  "action": "memory_set",
+  "group_id": "grp_devops",
+  "key": "runbook/cpu-spike",
+  "value": "1. Check if deploy happened in last 30min. 2. Check for memory leaks. 3. Scale horizontally if >90% for >5min."
+}
+```
+
+#### 5.10.8 Pod Lifecycle
+
+Pods are ephemeral squads with a lifecycle:
+
+```
+1. Agent creates pod: {"type": "group", "action": "create", "group_type": "pod", "name": "Investigate Outage #42", "invite": ["ag_monitor", "ag_deploy"]}
+2. Invited agents auto-join (or accept/decline based on settings)
+3. Pod members coordinate via group messages and group memory
+4. Task completes: {"type": "group", "action": "dissolve", "group_id": "grp_pod_42", "result": "resolved"}
+5. Pod memory is archived to fleet memory (configurable)
+6. Pod is dissolved
+```
+
+#### 5.10.9 Auto-Assignment
+
+When a task arrives that matches a squad's capabilities, the mesh can suggest or auto-assign it:
+
+```json
+{
+  "type": "group",
+  "event": "task_routed",
+  "group_id": "grp_devops",
+  "task": {
+    "type": "task_request",
+    "task": "deploy",
+    "description": "Deploy v2.3 to staging",
+    "routed_because": "group capabilities match: [deploy]"
+  }
+}
+```
+
+The squad's members see the task and self-organize — one agent picks it up, others assist or monitor. No central orchestrator needed.
+
+#### 5.10.10 Wire Protocol
+
+Groups use the `group` message type with the fleet channel:
+
+```json
+// Join group
+{"type": "group", "action": "join", "group_id": "grp_devops"}
+
+// Create pod
+{"type": "group", "action": "create", "name": "Fix Bug #99", "group_type": "pod", "invite": ["ag_c0d3r", "ag_t3st3r"]}
+
+// Group broadcast
+{"type": "group", "action": "message", "group_id": "grp_devops", "payload": {...}}
+
+// Group memory
+{"type": "group", "action": "memory_set", "group_id": "grp_devops", "key": "status", "value": "deploying"}
+
+// Dissolve pod
+{"type": "group", "action": "dissolve", "group_id": "grp_pod_99", "archive_memory": true}
+```
+
+#### 5.10.11 Backend
+
+- **Groups table:** PostgreSQL (`groups` table with fleet_id FK, group_type enum)
+- **Membership:** PostgreSQL join table (`group_members`: group_id, agent_id, role, joined_at)
+- **Group channel:** Phoenix PubSub topic `fleet:{fleet_id}:group:{group_id}`
+- **Group memory:** Rust store, namespaced by group_id
+- **Pod cleanup:** Background job dissolves pods with no activity for 24h (configurable)
 
 ---
 
@@ -2513,23 +2753,24 @@ RingForge's defensibility comes from:
 
 ### 13.2 v1.0 (Weeks 9-16)
 
-**Goal:** Production-ready with all tiers, Go SDK, analytics, and hardened security.
+**Goal:** Production-ready with groups/squads, DM injection, and hardened security.
 
 | Feature | Priority | Description |
 |---------|----------|-------------|
-| Go SDK | P1 | Full-featured Go client |
-| OpenClaw Plugin | P0 | First-class OpenClaw integration |
-| Analytics dashboard | P1 | Fleet stats: agents, messages, memory, uptime |
+| DM → Agent Turn Injection | P0 | DMs trigger actual agent behavior via plugin hooks |
+| Groups & Squads | P0 | Sub-fleet coordination: squads (persistent), pods (ephemeral), channels (topic) |
+| Group messaging & memory | P0 | Scoped messages and shared memory per group |
+| Pod lifecycle | P1 | Create → coordinate → dissolve with memory archival |
+| OpenClaw Plugin v2 | P0 | DM injection, auto-presence sync, group tools |
+| TypeScript SDK | P0 | npm package for non-OpenClaw agents |
 | Multi-node clustering | P1 | BEAM distribution + Redis adapter for PubSub |
+| Analytics dashboard | P1 | Fleet stats: agents, messages, memory, uptime |
 | JWT authentication | P2 | Platform-embeddable auth |
 | Billing integration (Stripe) | P1 | Usage tracking → Stripe metered billing |
-| Landing page v2 | P1 | Use cases, pricing, interactive demo |
 | Documentation site | P0 | Full docs: protocol, SDKs, guides |
 | Semantic memory search | P2 | Redis Vector for embedding-based memory queries |
-| Admin dashboard (web) | P2 | Self-serve tenant management UI |
 | Load testing | P0 | Verify 1,000+ concurrent agents per node |
 | Security audit | P1 | External audit of auth, isolation, and crypto |
-| SOC 2 prep | P2 | Start documentation and process alignment |
 
 ### 13.3 v2.0 (Weeks 17-32)
 
@@ -2546,7 +2787,7 @@ RingForge's defensibility comes from:
 | SSO (SAML/OIDC) | P2 | Enterprise identity integration |
 | Audit log exports | P1 | Download audit logs via Admin API |
 | Custom event types | P1 | Tenants define custom activity kinds with schemas |
-| Agent groups | P1 | Sub-groups within a fleet (e.g., "research team", "devops team") |
+| Auto-assignment routing | P1 | Route tasks to groups based on capability matching |
 | Priority channels | P2 | High-priority messages get guaranteed delivery |
 | Geographically distributed hubs | P3 | Hub nodes in multiple regions with edge routing |
 
