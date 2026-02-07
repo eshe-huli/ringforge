@@ -44,6 +44,71 @@ defmodule Hub.Billing do
     Map.get(price_ids(), plan)
   end
 
+  # ── Plan Info ───────────────────────────────────────────────
+
+  @doc """
+  Returns plan information for the billing API / dashboard.
+
+  Each plan includes limits, features, and pricing metadata.
+  """
+  def plans_info do
+    %{
+      "free" => %{
+        name: "Free",
+        price: 0,
+        price_label: "Free forever",
+        limits: Quota.get_plan_limits("free"),
+        features: Quota.plan_features("free")
+      },
+      "pro" => %{
+        name: "Pro",
+        price: 2900,
+        price_label: "$29/mo",
+        limits: Quota.get_plan_limits("pro"),
+        features: Quota.plan_features("pro")
+      },
+      "scale" => %{
+        name: "Scale",
+        price: 9900,
+        price_label: "$99/mo",
+        limits: Quota.get_plan_limits("scale"),
+        features: Quota.plan_features("scale")
+      },
+      "enterprise" => %{
+        name: "Enterprise",
+        price: nil,
+        price_label: "Custom",
+        limits: Quota.get_plan_limits("enterprise"),
+        features: Quota.plan_features("enterprise")
+      }
+    }
+  end
+
+  @doc """
+  Returns the limits for a specific plan.
+  Delegates to Quota.get_plan_limits/1.
+  """
+  def get_plan_limits(plan), do: Quota.get_plan_limits(plan)
+
+  @doc """
+  Syncs a tenant's plan based on their current Stripe subscription status.
+
+  If the tenant has an active/trialing subscription, their plan is set accordingly.
+  Otherwise, they revert to free.
+  """
+  def sync_plan(%Tenant{} = tenant) do
+    plan = effective_plan(tenant.id)
+
+    tenant
+    |> Ecto.Changeset.change(%{plan: plan})
+    |> Repo.update()
+
+    Quota.set_plan_limits(tenant.id, plan)
+
+    Logger.info("[Hub.Billing] sync_plan: tenant #{tenant.id} → #{plan}")
+    {:ok, plan}
+  end
+
   # ── Customer Management ────────────────────────────────────
 
   @doc """

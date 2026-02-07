@@ -37,7 +37,14 @@ defmodule Hub.MixProject do
       {:postgrex, "~> 0.19.0"},
       {:brod, "~> 3.16"},
       {:bcrypt_elixir, "~> 3.0"},
-      {:stripity_stripe, "~> 3.2"}
+      {:stripity_stripe, "~> 3.2"},
+      {:ex_aws, "~> 2.5"},
+      {:ex_aws_s3, "~> 2.5"},
+      {:sweet_xml, "~> 0.7"},
+      {:hackney, "~> 1.20"},
+      {:ueberauth, "~> 0.10"},
+      {:ueberauth_github, "~> 0.8"},
+      {:ueberauth_google, "~> 0.12"}
     ]
   end
 end

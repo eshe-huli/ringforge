@@ -17,6 +17,10 @@ defmodule Hub.Auth.Tenant do
     field :email, :string
     field :password_hash, :string
     field :stripe_customer_id, :string
+    field :github_id, :string
+    field :github_username, :string
+    field :google_id, :string
+    field :auth_provider, :string, default: "email"
 
     # Virtual field — never persisted
     field :password, :string, virtual: true
@@ -54,6 +58,23 @@ defmodule Hub.Auth.Tenant do
         |> put_change(:password_hash, Bcrypt.hash_pwd_salt(password))
         |> delete_change(:password)
     end
+  end
+
+  @doc "Changeset for social login (GitHub/Google) — links social IDs to tenant."
+  def social_changeset(tenant, attrs) do
+    tenant
+    |> cast(attrs, [:github_id, :github_username, :google_id, :auth_provider])
+  end
+
+  @doc "Changeset for creating a tenant via social login (no password required)."
+  def social_registration_changeset(tenant, attrs) do
+    tenant
+    |> cast(attrs, [:name, :email, :github_id, :github_username, :google_id, :auth_provider])
+    |> validate_required([:name, :email])
+    |> validate_format(:email, ~r/^[^\s]+@[^\s]+\.[^\s]+$/, message: "must be a valid email")
+    |> unique_constraint(:email)
+    |> unique_constraint(:github_id)
+    |> unique_constraint(:google_id)
   end
 
   @doc "Verify a plaintext password against the stored hash."

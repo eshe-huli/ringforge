@@ -10,8 +10,29 @@ defmodule Hub.SessionController do
 
   alias Hub.Accounts
 
-  def register(conn, %{"name" => name, "email" => email, "password" => password}) do
-    case Accounts.register(%{name: name, email: email, password: password}) do
+  def register(conn, params) do
+    name = params["name"]
+    email = params["email"]
+    password = params["password"]
+    invite_code = params["invite_code"]
+
+    # Check invite-only mode
+    if Hub.Invites.invite_only?() do
+      case Hub.Invites.use_invite(invite_code) do
+        {:ok, _invite} ->
+          do_register(conn, %{name: name, email: email, password: password})
+
+        {:error, _reason} ->
+          conn
+          |> redirect(to: "/dashboard?error=#{URI.encode("Invalid or expired invite code")}&tab=register")
+      end
+    else
+      do_register(conn, %{name: name, email: email, password: password})
+    end
+  end
+
+  defp do_register(conn, attrs) do
+    case Accounts.register(attrs) do
       {:ok, %{tenant: tenant}} ->
         conn
         |> put_session(:tenant_id, tenant.id)

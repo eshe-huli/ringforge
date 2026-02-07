@@ -98,12 +98,21 @@ defmodule Hub.Auth do
       # Named agent: find existing or insert new, atomic
       case Repo.one(from a in Agent, where: a.name == ^name and a.fleet_id == ^fleet_id, limit: 1) do
         %Agent{} = existing ->
-          existing
-          |> Agent.changeset(%{
+          update_attrs = %{
             framework: Map.get(agent_params, :framework) || existing.framework,
             capabilities: Map.get(agent_params, :capabilities) || existing.capabilities,
             last_seen_at: DateTime.utc_now() |> DateTime.truncate(:second)
-          })
+          }
+
+          # Bind or update public key if provided
+          update_attrs =
+            case Map.get(agent_params, :public_key) do
+              pk when is_binary(pk) and byte_size(pk) == 32 -> Map.put(update_attrs, :public_key, pk)
+              _ -> update_attrs
+            end
+
+          existing
+          |> Agent.changeset(update_attrs)
           |> Repo.update()
 
         nil ->
@@ -152,6 +161,26 @@ defmodule Hub.Auth do
   end
 
   def verify_challenge(_, _, _), do: {:error, :no_public_key}
+
+  # --- Key Rotation ---
+
+  @doc """
+  Updates an agent's Ed25519 public key. Used for key rotation during
+  an authenticated session. The old key is immediately invalidated.
+
+  Accepts raw 32-byte binary public key.
+  """
+  def update_public_key(%Agent{} = agent, public_key_bytes)
+      when is_binary(public_key_bytes) and byte_size(public_key_bytes) == 32 do
+    # Revoke any pending challenges for this agent (old key can't sign them)
+    Hub.ChallengeStore.revoke(agent.agent_id)
+
+    agent
+    |> Agent.changeset(%{public_key: public_key_bytes})
+    |> Repo.update()
+  end
+
+  def update_public_key(_, _), do: {:error, :invalid_public_key}
 
   # --- Lookups ---
 

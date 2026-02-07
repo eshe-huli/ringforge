@@ -46,6 +46,7 @@ defmodule Hub.Router do
     pipe_through :api
     get "/health", HealthController, :index
     get "/connect/check", ConnectController, :check
+    post "/auth/challenge", ChallengeController, :create
   end
 
   scope "/api/v1", Hub do
@@ -59,6 +60,16 @@ defmodule Hub.Router do
     resources "/keys", KeyController, only: [:index, :create, :delete]
     resources "/agents", AgentController, only: [:index, :show, :update, :delete]
     post "/agents/cleanup", AgentController, :cleanup
+
+    # Billing API (authenticated)
+    get "/billing/plans", BillingApiController, :plans
+    get "/billing/subscription", BillingApiController, :subscription
+    post "/billing/checkout", BillingApiController, :checkout
+    post "/billing/portal", BillingApiController, :portal
+
+    # Webhooks API (authenticated)
+    resources "/webhooks", WebhookApiController, only: [:index, :create, :show, :update, :delete]
+    post "/webhooks/:id/test", WebhookApiController, :test
   end
 
   scope "/", Hub do
@@ -72,10 +83,21 @@ defmodule Hub.Router do
     post "/login", SessionController, :login
     post "/api-key", SessionController, :api_key_login
     get "/logout", SessionController, :logout
+
+    # Magic link
+    post "/magic-link", AuthController, :magic_link_send
+    get "/magic-link/:token", AuthController, :magic_link_verify
+
+    # OAuth (Ueberauth)
+    get "/:provider", AuthController, :request
+    get "/:provider/callback", AuthController, :callback
   end
 
   scope "/", Hub.Live do
     pipe_through :browser
     live "/dashboard", DashboardLive
+    live "/billing", BillingLive
+    live "/webhooks", WebhooksLive
+    live "/invites", InvitesLive
   end
 end

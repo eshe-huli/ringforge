@@ -15,6 +15,7 @@
 3. [Target Users](#3-target-users)
 4. [Product Vision](#4-product-vision)
 5. [Core Features (MVP)](#5-core-features-mvp)
+    - [5.11 Task Orchestration & Capability Routing](#511-task-orchestration--capability-routing)
 6. [System Architecture](#6-system-architecture)
 7. [Protocol Specification](#7-protocol-specification)
 8. [Multi-Tenancy Design](#8-multi-tenancy-design)
@@ -983,6 +984,103 @@ Groups use the `group` message type with the fleet channel:
 
 ---
 
+### 5.11 Task Orchestration & Capability Routing
+
+> **Status:** ✅ Implemented (Phase 8, 2026-02-07)
+
+#### Overview
+
+The task orchestration system enables work distribution across the fleet. Agents submit tasks with capability requirements; the Hub routes them to the best available agent based on capabilities and load.
+
+#### Architecture
+
+| Component | Role |
+|-----------|------|
+| `Hub.Task` | ETS-backed task store. Tasks are ephemeral (not DB-persisted) — transient work, not durable records. |
+| `Hub.TaskRouter` | Capability matching engine. Matches task requirements against registered agent capabilities, selects agent with lowest current load. |
+| `Hub.TaskSupervisor` | GenServer orchestrator. 1-second tick for task lifecycle management (timeouts, reassignment, cleanup). |
+| `Hub.Workers.OllamaBridge` | Virtual agent bridge for local Ollama models. Registers Ollama models as fleet peers with declared capabilities. |
+
+#### Wire Protocol
+
+**Submit task (Client → Server)**
+```json
+{
+  "type": "task",
+  "action": "submit",
+  "ref": "t_001",
+  "payload": {
+    "description": "Review this code for security issues",
+    "capabilities": ["code-review", "security"],
+    "priority": "normal",
+    "data": { "code": "..." }
+  }
+}
+```
+
+**Task claimed (Server → Client, to submitter)**
+```json
+{
+  "type": "task",
+  "event": "claimed",
+  "ref": "t_001",
+  "agent_id": "ag_...",
+  "agent_name": "qwen2.5-coder"
+}
+```
+
+**Task result (Worker → Server → Client)**
+```json
+{
+  "type": "task",
+  "action": "result",
+  "ref": "t_001",
+  "payload": {
+    "status": "completed",
+    "result": { "findings": [...] }
+  }
+}
+```
+
+**Query task status (Client → Server)**
+```json
+{
+  "type": "task",
+  "action": "status",
+  "ref": "t_001"
+}
+```
+
+#### Task Lifecycle
+
+```
+submitted → routed → claimed → in_progress → completed/failed
+                                    ↓
+                              timeout → reassigned
+```
+
+#### Ollama Bridge (Local LLM Workers)
+
+The Ollama bridge registers local LLM models as fleet agents. Each model:
+- Has a unique agent identity in the mesh
+- Declares capabilities based on model specialization
+- Receives tasks via the standard routing mechanism
+- Returns results through the same wire protocol
+
+Current workers:
+- `qwen2.5-coder:7b` — Code generation, review, refactoring
+- `llama3.1:8b` — General-purpose reasoning, summarization, analysis
+
+**Design principle:** These are fleet **peers**, not tools. The Hub treats them identically to cloud-hosted agents. A task submitter doesn't know whether a local 7B model or a cloud LLM handles their request.
+
+#### Design Decisions
+
+1. **ETS, not Postgres** — Tasks are transient. Sub-millisecond reads matter more than durability. If the Hub restarts, pending tasks are lost by design.
+2. **Server-side routing** — Clients submit requirements, the Hub matches. Keeps clients simple and routing intelligence centralized.
+3. **Models as agents** — Ollama models register as peers, enabling transparent routing across cloud and local LLMs.
+
+---
+
 ## 6. System Architecture
 
 ### 6.1 Architecture Overview
@@ -1338,7 +1436,7 @@ Every message follows a common envelope format:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `type` | Yes | Message category: `auth`, `presence`, `activity`, `memory`, `file`, `replay`, `direct`, `system` |
+| `type` | Yes | Message category: `auth`, `presence`, `activity`, `memory`, `file`, `replay`, `direct`, `system`, `task` |
 | `action` | Sometimes | Sub-operation within the type |
 | `ref` | No | Client-generated correlation ID for request/response matching |
 | `payload` | Varies | Message-specific data |
@@ -2778,7 +2876,7 @@ RingForge's defensibility comes from:
 
 | Feature | Priority | Description |
 |---------|----------|-------------|
-| Agent capability discovery | P1 | Agents register capabilities; mesh routes requests to capable agents |
+| ~~Agent capability discovery~~ | ~~P1~~ | ✅ **Done (Phase 8)** — Hub.TaskRouter matches tasks to capable agents |
 | Cross-fleet bridging | P2 | Agents from different fleets collaborate (with permission) |
 | Webhook integrations | P1 | Trigger webhooks on fleet events |
 | Agent marketplace | P2 | Publish/subscribe to specialized agents |
@@ -2787,7 +2885,7 @@ RingForge's defensibility comes from:
 | SSO (SAML/OIDC) | P2 | Enterprise identity integration |
 | Audit log exports | P1 | Download audit logs via Admin API |
 | Custom event types | P1 | Tenants define custom activity kinds with schemas |
-| Auto-assignment routing | P1 | Route tasks to groups based on capability matching |
+| ~~Auto-assignment routing~~ | ~~P1~~ | ✅ **Done (Phase 8)** — Hub.TaskRouter + Hub.TaskSupervisor |
 | Priority channels | P2 | High-priority messages get guaranteed delivery |
 | Geographically distributed hubs | P3 | Hub nodes in multiple regions with edge routing |
 
@@ -2905,7 +3003,7 @@ These early signals predict long-term success:
 | # | Question | Status | Notes |
 |---|----------|--------|-------|
 | 1 | Should memory support versioning (conflict resolution)? | Open | Could use CRDTs or last-write-wins. MVP: last-write-wins. |
-| 2 | Should agents be able to "claim" tasks to prevent duplication? | Open | Mutex/lock pattern useful for some use cases. v1.1 maybe. |
+| 2 | Should agents be able to "claim" tasks to prevent duplication? | ✅ Resolved | Yes — implemented in Phase 8 via `task:claim` protocol. Hub.TaskRouter assigns, agent claims, prevents duplication. |
 | 3 | How to handle large fleets (100+ agents)? | Open | May need presence sharding or hierarchical channels. |
 | 4 | Should there be a REST API for memory (in addition to WebSocket)? | Open | Useful for non-realtime integrations. Probably v1.0. |
 | 5 | Federation protocol details? | Deferred | v2.0+. Need real multi-org use cases first. |
@@ -3060,6 +3158,7 @@ Complete request/response cycles as they appear on the wire:
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0.0-draft | 2026-02-06 | Ben Ouattara | Initial PRD |
+| 1.1.0-draft | 2026-02-07 | Onyx Key | Added §5.11 Task Orchestration, updated protocol types, resolved open question #2, marked capability routing as done in v2.0 roadmap |
 
 ---
 

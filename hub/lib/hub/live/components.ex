@@ -665,5 +665,7 @@ defmodule Hub.Live.Components do
   def render_icon(:trash, class), do: Icons.trash(%{class: class})
   def render_icon(:copy, class), do: Icons.copy(%{class: class})
   def render_icon(:log_out, class), do: Icons.log_out(%{class: class})
+  def render_icon(:hard_drive, class), do: Icons.hard_drive(%{class: class})
+  def render_icon(:credit_card, class), do: Icons.credit_card(%{class: class})
   def render_icon(_, _class), do: nil
 end

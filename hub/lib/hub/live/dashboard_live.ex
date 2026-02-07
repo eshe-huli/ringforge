@@ -60,7 +60,15 @@ defmodule Hub.Live.DashboardLive do
           show_all_agents: false,
           registered_agents: [],
           active_keys: [],
-          authenticated: true
+          authenticated: true,
+          wizard_open: false,
+          wizard_step: 1,
+          wizard_framework: nil,
+          wizard_agent_name: "",
+          wizard_live_key: nil,
+          wizard_waiting: false,
+          wizard_connected_agent: nil,
+          wizard_agent_count_at_open: 0
         )
 
         if connected?(socket) do
@@ -82,6 +90,7 @@ defmodule Hub.Live.DashboardLive do
         # Read error/tab from URL params (set by SessionController redirect)
         auth_error = params["error"]
         auth_tab = params["tab"] || "login"
+        invite_code = params["invite"] || ""
         {:ok, assign(socket,
           authenticated: false,
           auth_error: auth_error,
@@ -89,7 +98,10 @@ defmodule Hub.Live.DashboardLive do
           key_input: "",
           register_name: "",
           register_email: "",
-          login_email: ""
+          login_email: "",
+          magic_link_email: "",
+          invite_code: invite_code,
+          invite_only: Hub.Invites.invite_only?()
         )}
     end
   end
@@ -134,6 +146,14 @@ defmodule Hub.Live.DashboardLive do
   end
 
   # Navigation
+  def handle_event("navigate", %{"view" => "billing"}, socket) do
+    {:noreply, redirect(socket, to: "/billing")}
+  end
+
+  def handle_event("navigate", %{"view" => "webhooks"}, socket) do
+    {:noreply, redirect(socket, to: "/webhooks")}
+  end
+
   def handle_event("navigate", %{"view" => view} = params, socket) do
     socket = assign(socket, current_view: view, cmd_open: false, cmd_query: "")
 
@@ -245,6 +265,12 @@ defmodule Hub.Live.DashboardLive do
 
   def handle_event("esc_pressed", _, socket) do
     cond do
+      socket.assigns[:wizard_open] ->
+        {:noreply, assign(socket,
+          wizard_open: false, wizard_step: 1, wizard_framework: nil,
+          wizard_agent_name: "", wizard_live_key: nil, wizard_waiting: false,
+          wizard_connected_agent: nil
+        )}
       socket.assigns.cmd_open ->
         {:noreply, assign(socket, cmd_open: false, cmd_query: "")}
       socket.assigns.agent_detail_open ->
@@ -407,6 +433,66 @@ defmodule Hub.Live.DashboardLive do
     {:noreply, assign(socket, toast: {:error, "Invalid key type"})}
   end
 
+  # ── Add Agent Wizard ───────────────────────────────────────
+
+  def handle_event("open_wizard", _, socket) do
+    tenant_id = socket.assigns.tenant_id
+    fleet_id = socket.assigns.fleet_id
+
+    # Auto-generate a live key for the wizard
+    live_key = case Hub.Auth.generate_api_key("live", tenant_id, fleet_id) do
+      {:ok, raw_key, _api_key} -> raw_key
+      _ -> "ERROR_GENERATING_KEY"
+    end
+
+    {:noreply, assign(socket,
+      wizard_open: true,
+      wizard_step: 1,
+      wizard_framework: nil,
+      wizard_agent_name: "",
+      wizard_live_key: live_key,
+      wizard_waiting: false,
+      wizard_connected_agent: nil,
+      wizard_agent_count_at_open: map_size(socket.assigns.agents),
+      active_keys: load_active_keys(tenant_id)
+    )}
+  end
+
+  def handle_event("close_wizard", _, socket) do
+    {:noreply, assign(socket,
+      wizard_open: false,
+      wizard_step: 1,
+      wizard_framework: nil,
+      wizard_agent_name: "",
+      wizard_live_key: nil,
+      wizard_waiting: false,
+      wizard_connected_agent: nil
+    )}
+  end
+
+  def handle_event("wizard_select_framework", %{"framework" => framework}, socket) do
+    {:noreply, assign(socket, wizard_framework: framework, wizard_step: 2)}
+  end
+
+  def handle_event("wizard_set_name", %{"value" => value}, socket) do
+    {:noreply, assign(socket, wizard_agent_name: value)}
+  end
+
+  def handle_event("wizard_back", _, socket) do
+    step = max(socket.assigns.wizard_step - 1, 1)
+    {:noreply, assign(socket, wizard_step: step, wizard_waiting: false)}
+  end
+
+  def handle_event("wizard_next", _, socket) do
+    step = min(socket.assigns.wizard_step + 1, 4)
+    {:noreply, assign(socket, wizard_step: step)}
+  end
+
+  def handle_event("wizard_start_waiting", _, socket) do
+    Process.send_after(self(), :wizard_check_agent, 2_000)
+    {:noreply, assign(socket, wizard_waiting: true, wizard_step: 4)}
+  end
+
   # Revoke a single key by ID
   def handle_event("revoke_key", %{"id" => key_id}, socket) do
     import Ecto.Query
@@ -554,6 +640,29 @@ defmodule Hub.Live.DashboardLive do
 
   def handle_info(:clear_toast, socket), do: {:noreply, assign(socket, toast: nil)}
 
+  def handle_info(:wizard_check_agent, socket) do
+    if socket.assigns[:wizard_open] && socket.assigns[:wizard_waiting] && is_nil(socket.assigns[:wizard_connected_agent]) do
+      current_count = map_size(socket.assigns.agents)
+      if current_count > socket.assigns.wizard_agent_count_at_open do
+        # Find the newest agent (one that wasn't there before)
+        # Just pick the last one that joined
+        {newest_id, newest_meta} = Enum.max_by(socket.assigns.agents, fn {_id, m} ->
+          m[:connected_at] || ""
+        end)
+        {:noreply, assign(socket,
+          wizard_connected_agent: %{id: newest_id, name: newest_meta[:name] || newest_id},
+          wizard_step: 4,
+          wizard_waiting: false
+        )}
+      else
+        Process.send_after(self(), :wizard_check_agent, 2_000)
+        {:noreply, socket}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info(%Phoenix.Socket.Broadcast{}, socket), do: {:noreply, socket}
   def handle_info(_msg, socket), do: {:noreply, socket}
 
@@ -626,92 +735,182 @@ defmodule Hub.Live.DashboardLive do
 
             <%!-- Login tab --%>
             <%= if @auth_tab == "login" do %>
-              <form action="/auth/login" method="post" class="space-y-4 animate-fade-in">
-                <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
-                <div>
-                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Email</label>
-                  <.input
-                    type="email"
-                    name="email"
-                    value={@login_email}
-                    placeholder="you@example.com"
-                    autocomplete="email"
-                    required
-                    class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
-                  />
+              <div class="space-y-4 animate-fade-in">
+                <%!-- Social login buttons --%>
+                <div class="grid grid-cols-2 gap-3">
+                  <a href="/auth/github" class="flex items-center justify-center gap-2 h-10 rounded-lg border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium transition-colors">
+                    <Icons.github class="w-4 h-4" />
+                    GitHub
+                  </a>
+                  <a href="/auth/google" class="flex items-center justify-center gap-2 h-10 rounded-lg border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium transition-colors">
+                    <Icons.google class="w-4 h-4" />
+                    Google
+                  </a>
                 </div>
-                <div>
-                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Password</label>
-                  <.input
-                    type="password"
-                    name="password"
-                    placeholder="••••••••"
-                    autocomplete="current-password"
-                    required
-                    class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
-                  />
+
+                <div class="relative">
+                  <.separator />
+                  <span class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-zinc-900 px-3 text-xs text-zinc-500">or</span>
                 </div>
-                <.button
-                  type="submit"
-                  class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold h-10"
-                >
-                  <Icons.log_in class="w-4 h-4 mr-2" />
-                  Sign In
-                </.button>
-              </form>
+
+                <%!-- Email + Password --%>
+                <form action="/auth/login" method="post" class="space-y-4">
+                  <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
+                  <div>
+                    <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Email</label>
+                    <.input
+                      type="email"
+                      name="email"
+                      value={@login_email}
+                      placeholder="you@example.com"
+                      autocomplete="email"
+                      required
+                      class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                    />
+                  </div>
+                  <div>
+                    <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Password</label>
+                    <.input
+                      type="password"
+                      name="password"
+                      placeholder="••••••••"
+                      autocomplete="current-password"
+                      required
+                      class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                    />
+                  </div>
+                  <.button
+                    type="submit"
+                    class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold h-10"
+                  >
+                    <Icons.log_in class="w-4 h-4 mr-2" />
+                    Sign In
+                  </.button>
+                </form>
+
+                <%!-- Magic link divider --%>
+                <div class="relative">
+                  <.separator />
+                  <span class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-zinc-900 px-3 text-xs text-zinc-500">or</span>
+                </div>
+
+                <%!-- Magic link --%>
+                <form action="/auth/magic-link" method="post" class="space-y-3">
+                  <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
+                  <div>
+                    <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Sign in with magic link</label>
+                    <.input
+                      type="email"
+                      name="email"
+                      value={@magic_link_email}
+                      placeholder="you@example.com"
+                      autocomplete="email"
+                      required
+                      class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                    />
+                  </div>
+                  <.button
+                    type="submit"
+                    variant="outline"
+                    class="w-full border-zinc-700 text-zinc-300 hover:bg-zinc-800 font-semibold h-10"
+                  >
+                    <Icons.mail class="w-4 h-4 mr-2" />
+                    Send Magic Link
+                  </.button>
+                </form>
+              </div>
             <% end %>
 
             <%!-- Register tab --%>
             <%= if @auth_tab == "register" do %>
-              <form action="/auth/register" method="post" class="space-y-4 animate-fade-in">
-                <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
-                <div>
-                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Organization Name</label>
-                  <.input
-                    type="text"
-                    name="name"
-                    value={@register_name}
-                    placeholder="My Company"
-                    autocomplete="organization"
-                    required
-                    class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
-                  />
+              <div class="space-y-4 animate-fade-in">
+                <%!-- Social register buttons --%>
+                <div class="grid grid-cols-2 gap-3">
+                  <a href="/auth/github" class="flex items-center justify-center gap-2 h-10 rounded-lg border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium transition-colors">
+                    <Icons.github class="w-4 h-4" />
+                    GitHub
+                  </a>
+                  <a href="/auth/google" class="flex items-center justify-center gap-2 h-10 rounded-lg border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium transition-colors">
+                    <Icons.google class="w-4 h-4" />
+                    Google
+                  </a>
                 </div>
-                <div>
-                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Email</label>
-                  <.input
-                    type="email"
-                    name="email"
-                    value={@register_email}
-                    placeholder="you@example.com"
-                    autocomplete="email"
-                    required
-                    class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
-                  />
+
+                <div class="relative">
+                  <.separator />
+                  <span class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-zinc-900 px-3 text-xs text-zinc-500">or</span>
                 </div>
-                <div>
-                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Password</label>
-                  <.input
-                    type="password"
-                    name="password"
-                    placeholder="Min. 8 characters"
-                    autocomplete="new-password"
-                    required
-                    minlength="8"
-                    class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
-                  />
-                </div>
-                <.button
-                  type="submit"
-                  class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold h-10"
-                >
-                  <Icons.user_plus class="w-4 h-4 mr-2" />
-                  Create Account
-                </.button>
-                <p class="text-xs text-zinc-600 text-center">
-                  Free plan · 5 agents · No credit card required
-                </p>
-              </form>
+
+                <form action="/auth/register" method="post" class="space-y-4">
+                  <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
+                  <%= if @invite_only do %>
+                    <div>
+                      <label class="text-xs text-zinc-400 mb-1.5 block font-medium">
+                        Invite Code
+                        <span class="text-amber-400">*</span>
+                      </label>
+                      <.input
+                        type="text"
+                        name="invite_code"
+                        value={@invite_code}
+                        placeholder="Enter invite code"
+                        required
+                        autocomplete="off"
+                        class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50 font-mono"
+                      />
+                    </div>
+                  <% end %>
+                  <div>
+                    <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Organization Name</label>
+                    <.input
+                      type="text"
+                      name="name"
+                      value={@register_name}
+                      placeholder="My Company"
+                      autocomplete="organization"
+                      required
+                      class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                    />
+                  </div>
+                  <div>
+                    <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Email</label>
+                    <.input
+                      type="email"
+                      name="email"
+                      value={@register_email}
+                      placeholder="you@example.com"
+                      autocomplete="email"
+                      required
+                      class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                    />
+                  </div>
+                  <div>
+                    <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Password</label>
+                    <.input
+                      type="password"
+                      name="password"
+                      placeholder="Min. 8 characters"
+                      autocomplete="new-password"
+                      required
+                      minlength="8"
+                      class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                    />
+                  </div>
+                  <.button
+                    type="submit"
+                    class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold h-10"
+                  >
+                    <Icons.user_plus class="w-4 h-4 mr-2" />
+                    Create Account
+                  </.button>
+                  <p class="text-xs text-zinc-600 text-center">
+                    Free plan · 10 agents · No credit card required
+                    <%= if @invite_only do %>
+                      <br/><span class="text-amber-400/70">Invite code required</span>
+                    <% end %>
+                  </p>
+                </form>
+              </div>
             <% end %>
 
             <%!-- API Key tab --%>
@@ -770,6 +969,11 @@ defmodule Hub.Live.DashboardLive do
       <%!-- Command Palette --%>
       <Components.command_palette open={@cmd_open} query={@cmd_query} agents={@agents} />
 
+      <%!-- Add Agent Wizard --%>
+      <%= if @wizard_open do %>
+        <%= render_add_agent_wizard(assigns) %>
+      <% end %>
+
       <%!-- Header --%>
       <header class="h-12 border-b border-zinc-800 flex items-center justify-between px-4 shrink-0 bg-zinc-950">
         <div class="flex items-center gap-3">
@@ -827,6 +1031,8 @@ defmodule Hub.Live.DashboardLive do
             <Components.nav_item view="activity" icon={:activity} label="Activity" active={@current_view == "activity"} />
             <Components.nav_item view="messaging" icon={:message_square} label="Messaging" active={@current_view == "messaging"} />
             <Components.nav_item view="quotas" icon={:gauge} label="Quotas" active={@current_view == "quotas"} />
+            <Components.nav_item view="webhooks" icon={:webhook} label="Webhooks" active={false} />
+            <Components.nav_item view="billing" icon={:credit_card} label="Billing" active={false} />
             <Components.nav_item view="settings" icon={:settings} label="Settings" active={@current_view == "settings"} />
 
             <.separator class="my-4" />
@@ -871,10 +1077,12 @@ defmodule Hub.Live.DashboardLive do
     online = Enum.count(assigns.agents, fn {_, m} -> m[:state] == "online" end)
     msg_info = Map.get(assigns.usage, :messages_today, %{used: 0, limit: 0})
     mem_info = Map.get(assigns.usage, :memory_entries, %{used: 0, limit: 0})
+    tasks_today = try do Hub.Task.tasks_today() rescue _ -> 0 end
 
     assigns = assign(assigns,
       agents_sorted: agents_sorted, recent: recent,
-      ov_online: online, msg_info: msg_info, mem_info: mem_info
+      ov_online: online, msg_info: msg_info, mem_info: mem_info,
+      tasks_today: tasks_today
     )
 
     ~H"""
@@ -885,10 +1093,11 @@ defmodule Hub.Live.DashboardLive do
       </div>
 
       <%!-- Stat cards --%>
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 lg-grid-4">
+      <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <Components.stat_card label="Total Agents" value={to_string(map_size(@agents))} icon={:bot} color="amber" />
         <Components.stat_card label="Online Now" value={to_string(@ov_online)} icon={:wifi} color="green" delta={"+" <> to_string(@ov_online)} delta_type={:positive} />
         <Components.stat_card label="Messages Today" value={Components.fmt_num(@msg_info[:used] || 0)} icon={:message_square} color="blue" />
+        <Components.stat_card label="Tasks Today" value={to_string(@tasks_today)} icon={:layers} color="blue" />
         <Components.stat_card label="Memory Used" value={to_string(Components.quota_pct(@mem_info)) <> "%"} icon={:brain} color="purple" />
       </div>
 
@@ -897,10 +1106,22 @@ defmodule Hub.Live.DashboardLive do
         <div>
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-medium text-zinc-300">Active Agents</h3>
-            <.button variant="link" phx-click="navigate" phx-value-view="agents" class="text-xs text-amber-400 hover:text-amber-300 p-0 h-auto">View all →</.button>
+            <div class="flex items-center gap-2">
+              <.button variant="outline" size="sm" phx-click="open_wizard" class="text-[10px] h-7 px-2.5 border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300">
+                <Icons.plus class="w-3 h-3 mr-1" /> Add Agent
+              </.button>
+              <.button variant="link" phx-click="navigate" phx-value-view="agents" class="text-xs text-amber-400 hover:text-amber-300 p-0 h-auto">View all →</.button>
+            </div>
           </div>
           <%= if map_size(@agents) == 0 do %>
-            <Components.empty_state message="No agents connected" subtitle="Agents appear here when they join the fleet" icon={:bot} />
+            <div class="space-y-3">
+              <Components.empty_state message="No agents connected" subtitle="Agents appear here when they join the fleet" icon={:bot} />
+              <div class="text-center">
+                <.button variant="outline" phx-click="open_wizard" class="border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300">
+                  <Icons.plus class="w-4 h-4 mr-2" /> Add Your First Agent
+                </.button>
+              </div>
+            </div>
           <% else %>
             <div class="grid grid-cols-2 xl:grid-cols-3 gap-2">
               <%= for {agent_id, meta} <- @agents_sorted do %>
@@ -1004,6 +1225,9 @@ defmodule Hub.Live.DashboardLive do
               <p class="text-sm text-zinc-500"><%= @total_registered %> registered · <%= @agents_online %> online</p>
             </div>
             <div class="flex items-center gap-3">
+              <.button variant="outline" size="sm" phx-click="open_wizard" class="h-8 px-3 border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300">
+                <Icons.plus class="w-3.5 h-3.5 mr-1.5" /> Add Agent
+              </.button>
               <%!-- Connected/All toggle --%>
               <div class="flex rounded-lg border border-zinc-800 p-0.5 bg-zinc-900">
                 <.button
@@ -1037,7 +1261,12 @@ defmodule Hub.Live.DashboardLive do
         <%!-- Table --%>
         <div class="flex-1 overflow-auto">
           <%= if @agents_list == [] do %>
-            <Components.empty_state message="No agents found" subtitle="Try a different search or wait for agents" icon={:search} />
+            <div class="flex flex-col items-center justify-center py-16 space-y-4">
+              <Components.empty_state message="No agents found" subtitle="Add your first agent to get started" icon={:bot} />
+              <.button variant="outline" phx-click="open_wizard" class="border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300">
+                <Icons.plus class="w-4 h-4 mr-2" /> Add Agent
+              </.button>
+            </div>
           <% else %>
             <.table>
               <.table_header class="sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-sm">
@@ -1874,6 +2103,286 @@ defmodule Hub.Live.DashboardLive do
     end
   end
   defp handle_hub_event(_, socket), do: socket
+
+  # ══════════════════════════════════════════════════════════
+  # Add Agent Wizard
+  # ══════════════════════════════════════════════════════════
+
+  defp render_add_agent_wizard(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-[60] flex items-center justify-center animate-fade-in" phx-window-keydown="esc_pressed" phx-key="Escape">
+      <%!-- Backdrop --%>
+      <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" phx-click="close_wizard"></div>
+
+      <%!-- Modal --%>
+      <div class="relative w-full max-w-xl mx-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl overflow-hidden">
+        <%!-- Header --%>
+        <div class="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-amber-500/15 border border-amber-500/25 flex items-center justify-center">
+              <Icons.plus class="w-4 h-4 text-amber-400" />
+            </div>
+            <div>
+              <h3 class="text-sm font-semibold text-zinc-100">Add Agent</h3>
+              <p class="text-[11px] text-zinc-500">Step <%= @wizard_step %> of 4</p>
+            </div>
+          </div>
+          <button phx-click="close_wizard" class="text-zinc-500 hover:text-zinc-300 transition-colors p-1">
+            <Icons.x class="w-4 h-4" />
+          </button>
+        </div>
+
+        <%!-- Step indicator --%>
+        <div class="px-6 pt-4">
+          <div class="flex items-center gap-1.5">
+            <%= for step <- 1..4 do %>
+              <div class={"h-1 rounded-full flex-1 transition-colors duration-200 " <>
+                cond do
+                  step < @wizard_step -> "bg-amber-400"
+                  step == @wizard_step -> "bg-amber-400"
+                  true -> "bg-zinc-800"
+                end
+              }></div>
+            <% end %>
+          </div>
+        </div>
+
+        <%!-- Content --%>
+        <div class="px-6 py-5">
+          <%= case @wizard_step do %>
+            <% 1 -> %>
+              <%!-- Step 1: Pick Framework --%>
+              <div class="space-y-4">
+                <div>
+                  <h4 class="text-sm font-medium text-zinc-200">How are you connecting?</h4>
+                  <p class="text-xs text-zinc-500 mt-1">Pick your framework — we'll show you the right code</p>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2">
+                  <%= for {id, label, subtitle, icon} <- [
+                    {"openclaw", "OpenClaw", "Plugin", :plug},
+                    {"python", "Python", "SDK", :code},
+                    {"nodejs", "Node.js", "SDK", :package},
+                    {"terminal", "Terminal", "CLI", :terminal},
+                    {"other", "Other", "Manual", :settings}
+                  ] do %>
+                    <button
+                      phx-click="wizard_select_framework"
+                      phx-value-framework={id}
+                      class="group flex items-center gap-3 p-3 rounded-lg border border-zinc-800 bg-zinc-900 hover:border-amber-500/40 hover:bg-amber-500/5 transition-all duration-150 text-left"
+                    >
+                      <div class="w-9 h-9 rounded-lg bg-zinc-800 group-hover:bg-amber-500/15 flex items-center justify-center transition-colors">
+                        <%= render_wizard_icon(icon, assigns) %>
+                      </div>
+                      <div>
+                        <div class="text-xs font-medium text-zinc-200 group-hover:text-amber-300 transition-colors"><%= label %></div>
+                        <div class="text-[10px] text-zinc-600"><%= subtitle %></div>
+                      </div>
+                    </button>
+                  <% end %>
+                </div>
+              </div>
+
+            <% 2 -> %>
+              <%!-- Step 2: Name Your Agent --%>
+              <div class="space-y-4">
+                <div>
+                  <h4 class="text-sm font-medium text-zinc-200">Name your agent</h4>
+                  <p class="text-xs text-zinc-500 mt-1">Optional — a name will be auto-generated if blank</p>
+                </div>
+
+                <div>
+                  <.input
+                    type="text"
+                    placeholder="my-agent"
+                    value={@wizard_agent_name}
+                    phx-keyup="wizard_set_name"
+                    class="bg-zinc-950 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                  />
+                </div>
+
+                <div class="flex items-center justify-between pt-2">
+                  <button phx-click="wizard_back" class="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+                    <Icons.arrow_left class="w-3.5 h-3.5" /> Back
+                  </button>
+                  <.button variant="default" phx-click="wizard_next" class="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium text-xs px-4">
+                    Next →
+                  </.button>
+                </div>
+              </div>
+
+            <% 3 -> %>
+              <%!-- Step 3: Copy & Connect --%>
+              <div class="space-y-4">
+                <div>
+                  <h4 class="text-sm font-medium text-zinc-200">Copy & connect</h4>
+                  <p class="text-xs text-zinc-500 mt-1">Paste this into your project, then click "Check now"</p>
+                </div>
+
+                <div class="relative">
+                  <pre class="bg-zinc-950 rounded-lg p-4 font-mono text-[11px] text-zinc-300 overflow-x-auto border border-zinc-800 leading-relaxed whitespace-pre-wrap"><%= wizard_snippet(@wizard_framework, @wizard_live_key, @fleet_id, @wizard_agent_name) %></pre>
+                  <button
+                    class="absolute top-2 right-2 p-1.5 rounded-md bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
+                    title="Copy to clipboard"
+                    id="wizard-copy-btn"
+                    data-clipboard={wizard_snippet(@wizard_framework, @wizard_live_key, @fleet_id, @wizard_agent_name)}
+                    onclick="navigator.clipboard.writeText(this.dataset.clipboard).then(() => { this.innerHTML='<svg class=&quot;w-3.5 h-3.5 text-green-400&quot; viewBox=&quot;0 0 24 24&quot; fill=&quot;none&quot; stroke=&quot;currentColor&quot; stroke-width=&quot;2&quot;><path d=&quot;M20 6 9 17l-5-5&quot;/></svg>'; setTimeout(() => { this.innerHTML='<svg class=&quot;w-3.5 h-3.5&quot; viewBox=&quot;0 0 24 24&quot; fill=&quot;none&quot; stroke=&quot;currentColor&quot; stroke-width=&quot;2&quot;><rect width=&quot;8&quot; height=&quot;4&quot; x=&quot;8&quot; y=&quot;2&quot; rx=&quot;1&quot;/><path d=&quot;M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2&quot;/></svg>'; }, 2000); });"
+                  >
+                    <Icons.clipboard class="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div class="flex items-center justify-between pt-2">
+                  <button phx-click="wizard_back" class="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+                    <Icons.arrow_left class="w-3.5 h-3.5" /> Back
+                  </button>
+                  <.button variant="default" phx-click="wizard_start_waiting" class="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium text-xs px-4">
+                    I've connected — check now
+                  </.button>
+                </div>
+              </div>
+
+            <% 4 -> %>
+              <%!-- Step 4: Waiting / Success --%>
+              <div class="space-y-4">
+                <%= if @wizard_connected_agent do %>
+                  <%!-- Success --%>
+                  <div class="text-center py-6 space-y-4">
+                    <div class="inline-flex items-center justify-center w-14 h-14 rounded-full bg-green-500/15 border border-green-500/25">
+                      <Icons.check class="w-7 h-7 text-green-400" />
+                    </div>
+                    <div>
+                      <h4 class="text-base font-semibold text-zinc-100">Agent connected!</h4>
+                      <p class="text-sm text-zinc-400 mt-1">
+                        <span class="text-amber-400 font-medium"><%= @wizard_connected_agent.name %></span> is now in your fleet
+                      </p>
+                    </div>
+                    <div class="flex items-center justify-center gap-3 pt-2">
+                      <.button
+                        variant="outline"
+                        phx-click="navigate"
+                        phx-value-view="agents"
+                        phx-value-agent={@wizard_connected_agent.id}
+                        class="border-zinc-700 text-zinc-300 hover:text-zinc-100"
+                      >
+                        View Agent
+                      </.button>
+                      <.button variant="default" phx-click="open_wizard" class="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium">
+                        Add Another
+                      </.button>
+                    </div>
+                  </div>
+                <% else %>
+                  <%!-- Waiting --%>
+                  <div class="text-center py-8 space-y-4">
+                    <div class="inline-flex items-center justify-center w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/20">
+                      <Icons.loader class="w-7 h-7 text-amber-400 animate-spin" />
+                    </div>
+                    <div>
+                      <h4 class="text-sm font-medium text-zinc-200">Waiting for your agent to connect…</h4>
+                      <p class="text-xs text-zinc-500 mt-1">Run the code above, then we'll detect it automatically</p>
+                    </div>
+                    <div class="flex items-center justify-center gap-1.5 text-zinc-600">
+                      <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                      <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse [animation-delay:0.2s]"></span>
+                      <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse [animation-delay:0.4s]"></span>
+                    </div>
+                  </div>
+
+                  <div class="flex items-center justify-between pt-2">
+                    <button phx-click="wizard_back" class="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+                      <Icons.arrow_left class="w-3.5 h-3.5" /> Back
+                    </button>
+                    <button phx-click="close_wizard" class="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+                      Cancel
+                    </button>
+                  </div>
+                <% end %>
+              </div>
+
+            <% _ -> %>
+              <div></div>
+          <% end %>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  defp render_wizard_icon(icon, assigns) do
+    case icon do
+      :plug -> ~H"<Icons.plug class='w-4 h-4 text-zinc-400 group-hover:text-amber-400 transition-colors' />"
+      :code -> ~H"<Icons.code class='w-4 h-4 text-zinc-400 group-hover:text-amber-400 transition-colors' />"
+      :package -> ~H"<Icons.package class='w-4 h-4 text-zinc-400 group-hover:text-amber-400 transition-colors' />"
+      :terminal -> ~H"<Icons.terminal class='w-4 h-4 text-zinc-400 group-hover:text-amber-400 transition-colors' />"
+      :settings -> ~H"<Icons.settings class='w-4 h-4 text-zinc-400 group-hover:text-amber-400 transition-colors' />"
+      _ -> ~H"<Icons.settings class='w-4 h-4 text-zinc-400 group-hover:text-amber-400 transition-colors' />"
+    end
+  end
+
+  defp wizard_snippet("openclaw", key, fleet_id, name) do
+    name = if name == "" or is_nil(name), do: "my-agent", else: name
+    """
+    # Add to your openclaw.yaml
+    ringforge:
+      enabled: true
+      server: "wss://ringforge.wejoona.com"
+      apiKey: "#{key}"
+      fleetId: "#{fleet_id}"
+      agentName: "#{name}"
+      capabilities: ["code", "research"]\
+    """
+  end
+
+  defp wizard_snippet("python", key, _fleet_id, name) do
+    name = if name == "" or is_nil(name), do: "my-agent", else: name
+    """
+    pip install ringforge
+    # ──────────────
+    from ringforge import Agent
+    agent = Agent(
+        key="#{key}",
+        name="#{name}",
+        server="wss://ringforge.wejoona.com"
+    )
+    agent.connect()\
+    """
+  end
+
+  defp wizard_snippet("nodejs", key, _fleet_id, name) do
+    name = if name == "" or is_nil(name), do: "my-agent", else: name
+    """
+    npm install ringforge
+    // ──────────────
+    const { Agent } = require('ringforge');
+    const agent = new Agent({
+      key: '#{key}',
+      name: '#{name}',
+      server: 'wss://ringforge.wejoona.com'
+    });
+    agent.connect();\
+    """
+  end
+
+  defp wizard_snippet("terminal", key, _fleet_id, name) do
+    name = if name == "" or is_nil(name), do: "my-agent", else: name
+    """
+    npx ringforge-connect \\
+      --key #{key} \\
+      --name "#{name}" \\
+      --server wss://ringforge.wejoona.com\
+    """
+  end
+
+  defp wizard_snippet("other", key, _fleet_id, name) do
+    name = if name == "" or is_nil(name), do: "my-agent", else: name
+    """
+    WebSocket: wss://ringforge.wejoona.com/ws
+    Auth: {"api_key": "#{key}", "agent": {"name": "#{name}"}}\
+    """
+  end
+
+  defp wizard_snippet(_, key, fleet_id, name), do: wizard_snippet("other", key, fleet_id, name)
 
   # ══════════════════════════════════════════════════════════
   # Helpers

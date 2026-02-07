@@ -41,8 +41,22 @@ defmodule Hub.Application do
       # Quota tracking (ETS-backed, must start before Endpoint)
       {Hub.Quota, []},
 
+      # Challenge store for Ed25519 auth (ETS-backed, must start before Endpoint)
+      {Hub.ChallengeStore, []},
+
       # TwMerge cache for SaladUI
       TwMerge.Cache,
+
+      # Task orchestration (ETS-backed ephemeral task store + supervisor)
+      {Hub.TaskInit, []},
+      Hub.TaskSupervisor,
+      {Hub.Workers.OllamaBridge, []},
+
+      # Webhook dispatcher (outbound webhook delivery)
+      {Hub.WebhookDispatcher, []},
+
+      # Webhook event subscriber (bridges PubSub → WebhookDispatcher)
+      {Hub.WebhookSubscriber, []},
 
       # Phoenix endpoint (WebSocket transport)
       Hub.Endpoint

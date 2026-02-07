@@ -24,32 +24,66 @@ defmodule Hub.Quota do
   @idempotency_ttl_ms 300_000  # 5 minutes
   @idempotency_cleanup_ms 300_000  # 5 minutes
 
-  @plan_limits %{
+  # Default plan limits — can be overridden via config :hub, Hub.Billing, plans: ...
+  @default_plan_limits %{
     "free" => %{
       messages_today: 50_000,
       memory_entries: 5_000,
       connected_agents: 10,
-      fleets: 1
+      fleets: 1,
+      storage_bytes: 1_073_741_824
     },
     "pro" => %{
       messages_today: 500_000,
       memory_entries: 100_000,
       connected_agents: 100,
-      fleets: 5
+      fleets: 5,
+      storage_bytes: 26_843_545_600
     },
     "scale" => %{
       messages_today: 5_000_000,
       memory_entries: 1_000_000,
       connected_agents: 1_000,
-      fleets: 25
+      fleets: 25,
+      storage_bytes: 268_435_456_000
     },
     "enterprise" => %{
       messages_today: :unlimited,
       memory_entries: :unlimited,
       connected_agents: :unlimited,
-      fleets: :unlimited
+      fleets: :unlimited,
+      storage_bytes: :unlimited
     }
   }
+
+  # Returns the plan limits map, merging any config overrides with defaults.
+  # Config is read from `config :hub, Hub.Billing, plans: %{...}`.
+  # Each plan config can include `:agents`, `:messages_per_day`, `:memory_entries`,
+  # `:fleets`, `:storage_bytes` — which are mapped to quota resource keys.
+  defp resolved_plan_limits do
+    case Application.get_env(:hub, Hub.Billing, [])[:plans] do
+      nil ->
+        @default_plan_limits
+
+      configured_plans when is_map(configured_plans) ->
+        Map.new(@default_plan_limits, fn {plan_name, defaults} ->
+          case Map.get(configured_plans, plan_name) do
+            nil ->
+              {plan_name, defaults}
+
+            overrides when is_map(overrides) ->
+              merged = %{
+                connected_agents: Map.get(overrides, :agents, defaults.connected_agents),
+                messages_today: Map.get(overrides, :messages_per_day, defaults.messages_today),
+                memory_entries: Map.get(overrides, :memory_entries, defaults.memory_entries),
+                fleets: Map.get(overrides, :fleets, defaults.fleets),
+                storage_bytes: Map.get(overrides, :storage_bytes, defaults.storage_bytes)
+              }
+              {plan_name, merged}
+          end
+        end)
+    end
+  end
 
   # ── Public API ─────────────────────────────────────────────
 
@@ -61,11 +95,15 @@ defmodule Hub.Quota do
   @doc """
   Increment a resource counter for a tenant.
 
-  Returns `{:ok, current_count}` if within quota,
-  or `{:error, :quota_exceeded}` if the limit would be exceeded.
-  Also returns quota warning metadata when usage crosses 80% or 95%.
+  Returns:
+  - `{:ok, current_count}` if within quota
+  - `{:ok, current_count, :warning}` if usage ≥ 80% (soft limit)
+  - `{:error, :quota_exceeded}` if the limit would be exceeded (hard limit at 100%)
+
+  Also broadcasts quota warnings when crossing 80%/95% thresholds.
   """
-  @spec increment(String.t(), atom()) :: {:ok, non_neg_integer()} | {:error, :quota_exceeded}
+  @spec increment(String.t(), atom()) ::
+          {:ok, non_neg_integer()} | {:ok, non_neg_integer(), :warning} | {:error, :quota_exceeded}
   def increment(tenant_id, resource) do
     key = {tenant_id, resource}
 
@@ -78,7 +116,13 @@ defmodule Hub.Quota do
         :ets.update_element(@table, key, {2, count + 1})
         new_count = count + 1
         maybe_warn(tenant_id, resource, new_count, limit)
-        {:ok, new_count}
+
+        # Return warning tuple when above 80% soft limit
+        if is_integer(limit) and limit > 0 and new_count / limit >= 0.8 do
+          {:ok, new_count, :warning}
+        else
+          {:ok, new_count}
+        end
 
       [{^key, _count, _limit}] ->
         {:error, :quota_exceeded}
@@ -130,7 +174,7 @@ defmodule Hub.Quota do
   @doc "Returns all resource usage for a tenant."
   @spec get_usage(String.t()) :: map()
   def get_usage(tenant_id) do
-    resources = [:messages_today, :memory_entries, :connected_agents, :fleets]
+    resources = [:messages_today, :memory_entries, :connected_agents, :fleets, :storage_bytes]
 
     Map.new(resources, fn resource ->
       key = {tenant_id, resource}
@@ -169,7 +213,8 @@ defmodule Hub.Quota do
   @doc "Load and apply plan limits for a tenant."
   @spec set_plan_limits(String.t(), String.t()) :: :ok
   def set_plan_limits(tenant_id, plan) do
-    limits = Map.get(@plan_limits, plan, @plan_limits["free"])
+    all_limits = resolved_plan_limits()
+    limits = Map.get(all_limits, plan, all_limits["free"])
 
     Enum.each(limits, fn {resource, limit} ->
       key = {tenant_id, resource}
@@ -188,7 +233,33 @@ defmodule Hub.Quota do
 
   @doc "Return plan limits map (for external use)."
   @spec plan_limits() :: map()
-  def plan_limits, do: @plan_limits
+  def plan_limits, do: resolved_plan_limits()
+
+  @doc """
+  Return the limits for a specific plan.
+
+  Returns quota resource keys: `:connected_agents`, `:messages_today`,
+  `:memory_entries`, `:fleets`, `:storage_bytes`.
+  """
+  @spec get_plan_limits(String.t()) :: map()
+  def get_plan_limits(plan) do
+    all = resolved_plan_limits()
+    Map.get(all, plan, all["free"])
+  end
+
+  @doc """
+  Returns feature flags for a plan (webhooks, audit_logs, event_retention).
+  """
+  @spec plan_features(String.t()) :: map()
+  def plan_features(plan) do
+    case plan do
+      "free" -> %{webhooks: false, audit_logs: false, event_retention_hours: 24}
+      "pro" -> %{webhooks: true, audit_logs: false, event_retention_hours: 168}
+      "scale" -> %{webhooks: true, audit_logs: true, event_retention_hours: 720}
+      "enterprise" -> %{webhooks: true, audit_logs: true, event_retention_hours: 2160}
+      _ -> %{webhooks: false, audit_logs: false, event_retention_hours: 24}
+    end
+  end
 
   # ── Idempotency API ───────────────────────────────────────
 

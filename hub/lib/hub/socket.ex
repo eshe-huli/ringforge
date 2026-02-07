@@ -65,10 +65,21 @@ defmodule Hub.Socket do
     end
   end
 
-  def connect(%{"agent_id" => agent_id, "challenge_response" => sig, "challenge" => challenge}, socket, _connect_info) do
-    # Reconnect via Ed25519 challenge-response (for agents with public keys)
+  def connect(%{"agent_id" => agent_id, "challenge_response" => sig}, socket, _connect_info) do
+    # Reconnect via Ed25519 challenge-response.
+    #
+    # Flow:
+    # 1. Agent POSTs to /api/auth/challenge with {agent_id} → gets {challenge}
+    # 2. Agent signs challenge with Ed25519 private key
+    # 3. Agent connects here with {agent_id, challenge_response: signature_b64}
+    #
+    # Hub looks up the pending challenge from ChallengeStore, verifies the
+    # signature against the agent's stored public key, and authenticates.
     with {:ok, agent} <- Hub.Auth.find_agent(agent_id),
-         :ok <- Hub.Auth.verify_challenge(agent, challenge, sig) do
+         {:ok, challenge} <- fetch_pending_challenge(agent_id),
+         :ok <- verify_challenge_signature(agent, challenge, sig) do
+      # Challenge consumed (deleted from store) on successful verify
+      Hub.ChallengeStore.revoke(agent_id)
       Hub.Auth.touch_agent(agent)
       Logger.info("Agent reconnected (challenge-verified): #{agent.agent_id}")
 
@@ -78,7 +89,7 @@ defmodule Hub.Socket do
         |> assign(:fleet_id, agent.fleet_id)
         |> assign(:agent_id, agent.agent_id)
         |> assign(:agent_db_id, agent.id)
-        |> assign(:auth_mode, :reconnect)
+        |> assign(:auth_mode, :challenge)
 
       {:ok, socket}
     else
@@ -121,12 +132,23 @@ defmodule Hub.Socket do
   defp maybe_put_public_key(map, nil), do: map
 
   defp maybe_put_public_key(map, pk_base64) when is_binary(pk_base64) do
-    case Base.decode64(pk_base64) do
-      {:ok, pk_bytes} when byte_size(pk_bytes) == 32 ->
-        Map.put(map, :public_key, pk_bytes)
-
-      _ ->
-        map
+    case Hub.Crypto.decode_public_key(pk_base64) do
+      {:ok, pk_bytes} -> Map.put(map, :public_key, pk_bytes)
+      _ -> map
     end
   end
+
+  defp fetch_pending_challenge(agent_id) do
+    case Hub.ChallengeStore.peek(agent_id) do
+      {:ok, challenge} -> {:ok, challenge}
+      :none -> {:error, :no_pending_challenge}
+    end
+  end
+
+  defp verify_challenge_signature(%{public_key: pk}, challenge_b64, signature_b64)
+       when is_binary(pk) and byte_size(pk) == 32 do
+    Hub.Crypto.verify_signature_raw(pk, challenge_b64, signature_b64)
+  end
+
+  defp verify_challenge_signature(_, _, _), do: {:error, :no_public_key}
 end

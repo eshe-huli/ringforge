@@ -1,12 +1,12 @@
 # Ringforge Roadmap
 
 ## Vision
-Full SaaS platform for AI agent fleet coordination. Stripe billing, social logins,
+Full SaaS platform for AI agent fleet coordination and task orchestration. Stripe billing, social logins,
 cloud provider integrations, agent creation from dashboard.
 
 ---
 
-## ✅ Completed (Phases 1–7)
+## ✅ Completed (Phases 1–8)
 
 | Phase | Feature | Status |
 |-------|---------|--------|
@@ -16,41 +16,60 @@ cloud provider integrations, agent creation from dashboard.
 | 4 | Shared Memory (CRUD, query, subscriptions) | ✅ |
 | 5 | Direct Messaging + Event Replay | ✅ |
 | 6 | Admin REST API + Quotas | ✅ |
-| 7 | LiveView Dashboard (6 pages, SaladUI) | ✅ |
+| 7 | LiveView Dashboard (6 pages, SaladUI) + Add Agent Wizard | ✅ |
 | — | Security Hardening (2026-02-07 audit) | ✅ |
+| — | Server-side idempotency (ETS, fleet_channel.ex) | ✅ |
+| — | Fleet:lobby auto-join | ✅ |
+| 8 | Task Orchestration & Capability Routing | ✅ |
 
----
+### Phase 7 Addition — Add Agent Wizard (2026-02-07)
+- [x] Dashboard "Add Agent" wizard (`dashboard_live.ex`)
+- [x] Dead-simple onboarding for vibecoders and non-tech users
 
-## 🚧 Phase 8 — SDKs & Idempotency
+### Phase 8 Details — Task Orchestration (2026-02-07)
+- [x] `Hub.Task` — ETS-backed task store
+- [x] `Hub.TaskRouter` — Capability-based matching (route to best agent by capabilities + load)
+- [x] `Hub.TaskSupervisor` — GenServer orchestrator (1s tick, task lifecycle)
+- [x] `Hub.Workers.OllamaBridge` — Virtual agents for local Ollama models
+- [x] Wire protocol: `task:submit`, `task:claim`, `task:result`, `task:status`
+- [x] Two Ollama workers: `qwen2.5-coder:7b`, `llama3.1:8b` (fleet peers, not tools)
 
-### 8.1 TypeScript SDK (`@ringforge/sdk`)
+### TypeScript SDK (built during Phase 7-8)
 - [x] Repo created: `eshe-huli/ringforge-sdk` (private)
 - [x] Types, client, sub-APIs (presence, activity, memory, DM, groups)
 - [x] Client-side idempotency (cache with TTL)
-- [ ] Server-side idempotency (Hub stores idempotency keys in ETS, returns cached response)
-- [ ] Fleet channel auto-join (resolve fleet from API key server-side)
-- [ ] npm publish pipeline
-- [ ] Integration tests against live hub
 
-### 8.2 Python SDK (`ringforge`)
+---
+
+## 🚧 Phase 9 — SDK Publishing & Polish
+
+### 9.1 TypeScript SDK npm publish
+- [ ] npm publish pipeline (`@ringforge/sdk`)
+- [ ] Integration tests against live hub
+- [ ] README + API docs
+
+### 9.2 Python SDK (`ringforge`)
 - [ ] websockets + asyncio client
 - [ ] Same API surface as TypeScript
 - [ ] PyPI publish pipeline
 
-### 8.3 Elixir SDK (`ringforge`)
+### 9.3 Elixir SDK (`ringforge`)
 - [ ] Phoenix Channel client
 - [ ] Hex publish pipeline
 
-### 8.4 Server-Side Idempotency
-- [ ] ETS table `hub_idempotency` — `{key, response, expires_at}`
-- [ ] FleetChannel extracts `_idempotency_key` from payload
-- [ ] Before processing: check cache → return cached if hit
-- [ ] After processing: store result with 5-min TTL
-- [ ] Applies to: `activity:broadcast`, `memory:set`, `direct:send`, `group:create`
+---
+
+## 📋 Phase 10 — OpenClaw RingForge Plugin
+
+- [ ] Argus-side plugin: auto-connect to RingForge hub on startup
+- [ ] Presence sync (OpenClaw agent state → RingForge presence)
+- [ ] DM injection (RingForge DMs → agent turns)
+- [ ] Task claim/result hooks
+- [ ] Config: `ringforge.enabled`, `ringforge.apiKey`, `ringforge.server`
 
 ---
 
-## 📋 Phase 9 — File Distribution (Garage/S3)
+## 📋 Phase 11 — File Distribution (Garage/S3)
 
 - [ ] Presigned upload URL endpoint (Hub → Garage)
 - [ ] Presigned download URL endpoint
@@ -61,7 +80,7 @@ cloud provider integrations, agent creation from dashboard.
 
 ---
 
-## 📋 Phase 10 — Production EventBus (Kafka)
+## 📋 Phase 12 — Production EventBus (Kafka)
 
 - [ ] Switch default from `Hub.EventBus.Local` to `Hub.EventBus.Kafka`
 - [ ] Kafka topic auto-creation per fleet
@@ -71,7 +90,7 @@ cloud provider integrations, agent creation from dashboard.
 
 ---
 
-## 📋 Phase 11 — Full Auth & Ed25519 Flow
+## 📋 Phase 13 — Full Auth & Ed25519 Flow
 
 - [ ] Challenge-response wired end-to-end in Socket registration
 - [ ] SDK: auto-generate Ed25519 keypair, store in config
@@ -81,7 +100,7 @@ cloud provider integrations, agent creation from dashboard.
 
 ---
 
-## 📋 Phase 12 — SaaS Billing (Stripe)
+## 📋 Phase 14 — SaaS Billing (Stripe)
 
 ### Plans (benchmarked against industry)
 
@@ -111,7 +130,7 @@ cloud provider integrations, agent creation from dashboard.
 
 ---
 
-## 📋 Phase 13 — Invite-Only + Social Login
+## 📋 Phase 15 — Invite-Only + Social Login
 
 ### Registration
 - [ ] Invite code system (admin generates codes, limited uses)
@@ -127,7 +146,7 @@ cloud provider integrations, agent creation from dashboard.
 
 ---
 
-## 📋 Phase 14 — Webhooks & Callbacks
+## 📋 Phase 16 — Webhooks & Callbacks
 
 - [ ] Webhook endpoint registration (URL, events, secret)
 - [ ] HMAC-SHA256 signed payloads
@@ -138,7 +157,7 @@ cloud provider integrations, agent creation from dashboard.
 
 ---
 
-## 📋 Phase 15 — Agent Creation from Dashboard
+## 📋 Phase 17 — Agent Provisioning from Dashboard
 
 ### Cloud Provider Integrations
 - [ ] Contabo API (VPS provisioning)
@@ -148,7 +167,6 @@ cloud provider integrations, agent creation from dashboard.
 - [ ] Provider credentials management (encrypted, per-tenant)
 
 ### Agent Provisioning
-- [ ] "Create Agent" wizard in dashboard
 - [ ] Template selection (OpenClaw agent, custom, bare)
 - [ ] One-click deploy: spin VPS → install agent → connect to fleet
 - [ ] Agent health monitoring from dashboard
@@ -157,17 +175,16 @@ cloud provider integrations, agent creation from dashboard.
 
 ---
 
-## 📋 Phase 16 — Capability Matching & Task Routing
+## 📋 Phase 18 — Agent Naming & Persistence Improvements
 
-- [ ] Task queue with capability requirements
-- [ ] Auto-routing: match task → agent with required capabilities + lowest load
-- [ ] Priority queuing
-- [ ] Task timeout + reassignment
-- [ ] Dashboard task board view
+- [ ] Persistent agent names across reconnections
+- [ ] Agent profiles (avatar, description, tags)
+- [ ] Session history and continuity
+- [ ] Agent migration between fleets
 
 ---
 
-## 📋 Phase 17 — Observability
+## 📋 Phase 19 — Observability
 
 - [ ] Grafana dashboards (Ringforge-specific)
   - Fleet overview (connected agents, message rates, memory usage)
@@ -178,7 +195,7 @@ cloud provider integrations, agent creation from dashboard.
 
 ---
 
-## 📋 Phase 18 — Multi-Region & Clustering
+## 📋 Phase 20 — Multi-Region & Clustering
 
 - [ ] libcluster with DNS strategy (replace gossip)
 - [ ] Multi-node hub deployment
@@ -188,7 +205,17 @@ cloud provider integrations, agent creation from dashboard.
 
 ---
 
-## 📋 Phase 19 — Pulsar EventBus
+## 📋 Phase 21 — Domotic / IoT Support
+
+- [ ] Lightweight agent protocol for embedded devices
+- [ ] Sensor data ingestion via fleet memory
+- [ ] Device presence and health monitoring
+- [ ] Home automation integrations (MQTT bridge)
+- [ ] Dashboard device view
+
+---
+
+## 📋 Phase 22 — Pulsar EventBus
 
 - [ ] `Hub.EventBus.Pulsar` implementation
 - [ ] Config swap: one line change
@@ -196,7 +223,7 @@ cloud provider integrations, agent creation from dashboard.
 
 ---
 
-## 📋 Phase 20 — Full Security Audit
+## 📋 Phase 23 — Full Security Audit
 
 - [ ] Penetration testing
 - [ ] OWASP Top 10 review
@@ -210,18 +237,19 @@ cloud provider integrations, agent creation from dashboard.
 
 ## Priority Order
 
-1. **Phase 8** — SDKs + Idempotency (agents can't use Ringforge without this)
-2. **Phase 12** — Stripe billing (SaaS can't charge without this)
-3. **Phase 13** — Auth (social login + invite = user acquisition)
-4. **Phase 11** — Full Ed25519 flow (security foundation)
-5. **Phase 9** — File distribution (frequently requested)
-6. **Phase 10** — Kafka production (data durability)
-7. **Phase 14** — Webhooks (integration point)
-8. **Phase 15** — Agent creation from dashboard (differentiator)
-9. **Phase 16** — Task routing (agent orchestration)
-10. **Phase 17** — Observability (ops maturity)
-11. **Phase 18-20** — Scale & audit
+1. **Phase 9** — SDK publish (agents need packages to connect)
+2. **Phase 10** — OpenClaw plugin (Argus connects to mesh)
+3. **Phase 14** — Stripe billing (SaaS can't charge without this)
+4. **Phase 15** — Auth (social login + invite = user acquisition)
+5. **Phase 13** — Full Ed25519 flow (security foundation)
+6. **Phase 11** — File distribution (frequently requested)
+7. **Phase 12** — Kafka production (data durability)
+8. **Phase 16** — Webhooks (integration point)
+9. **Phase 17** — Agent provisioning from dashboard (differentiator)
+10. **Phase 18** — Agent naming & persistence
+11. **Phase 19** — Observability (ops maturity)
+12. **Phase 20-23** — Scale, IoT, audit
 
 ---
 
-*Created: 2026-02-07 by Onyx Key*
+*Created: 2026-02-07 by Onyx Key | Updated: 2026-02-07 (Phase 8 complete)*

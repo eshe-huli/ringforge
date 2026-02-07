@@ -122,6 +122,9 @@ defmodule Hub.FleetChannel do
     # Subscribe to agent-specific direct delivery topic
     Phoenix.PubSub.subscribe(Hub.PubSub, "fleet:#{socket.assigns.fleet_id}:agent:#{socket.assigns.agent_id}")
 
+    # Ensure webhook subscriber is listening to this fleet's topic
+    Hub.WebhookSubscriber.subscribe_fleet(socket.assigns.fleet_id)
+
     # Deliver queued direct messages (async, don't block join)
     fleet_id = socket.assigns.fleet_id
     agent_id = socket.assigns.agent_id
@@ -165,6 +168,18 @@ defmodule Hub.FleetChannel do
   # Quota warnings (from PubSub)
   def handle_info({:quota_warning, msg}, socket) do
     push(socket, "system:quota_warning", msg)
+    {:noreply, socket}
+  end
+
+  # Task assignment delivery (from TaskSupervisor via PubSub)
+  def handle_info({:task_assigned, msg}, socket) do
+    push(socket, "task:assigned", msg)
+    {:noreply, socket}
+  end
+
+  # Task result delivery (from TaskSupervisor via PubSub)
+  def handle_info({:task_result, msg}, socket) do
+    push(socket, "task:result", msg)
     {:noreply, socket}
   end
 
@@ -719,6 +734,175 @@ defmodule Hub.FleetChannel do
     handle_in("replay:request", %{"payload" => %{}}, socket)
   end
 
+  # ── Tasks ──────────────────────────────────────────────────
+
+  def handle_in("task:submit", %{"payload" => payload}, socket) do
+    fleet_id = socket.assigns.fleet_id
+
+    cond do
+      is_nil(payload["prompt"]) or payload["prompt"] == "" ->
+        {:reply, {:error, %{
+          reason: "missing_prompt",
+          message: "Task requires a 'prompt' field.",
+          fix: "Add payload.prompt with the work description."
+        }}, socket}
+
+      not quota_ok?(socket.assigns.tenant_id, :messages_today) ->
+        {:reply, {:error, %{
+          reason: "quota_exceeded",
+          resource: "messages_today",
+          message: "Daily message quota reached.",
+          fix: "Wait until quota resets or upgrade your plan."
+        }}, socket}
+
+      true ->
+        Hub.Quota.increment(socket.assigns.tenant_id, :messages_today)
+
+        attrs = %{
+          fleet_id: fleet_id,
+          requester_id: socket.assigns.agent_id,
+          type: payload["type"] || "general",
+          prompt: payload["prompt"],
+          capabilities_required: payload["capabilities"] || [],
+          priority: payload["priority"],
+          ttl_ms: payload["ttl_ms"],
+          correlation_id: payload["correlation_id"]
+        }
+
+        case Hub.Task.create(attrs) do
+          {:ok, task} ->
+            # Notify supervisor to attempt immediate routing
+            Hub.TaskSupervisor.notify_new_task(fleet_id)
+
+            {:reply, {:ok, %{
+              "type" => "task",
+              "event" => "submitted",
+              "payload" => %{
+                "task_id" => task.task_id,
+                "status" => "pending"
+              }
+            }}, socket}
+        end
+    end
+  end
+
+  def handle_in("task:submit", payload, socket) when is_map(payload) do
+    handle_in("task:submit", %{"payload" => payload}, socket)
+  end
+
+  def handle_in("task:claim", %{"payload" => %{"task_id" => task_id}}, socket) do
+    agent_id = socket.assigns.agent_id
+
+    case Hub.Task.get(task_id) do
+      {:ok, %{assigned_to: ^agent_id, status: :assigned} = task} ->
+        case Hub.Task.start(task_id) do
+          {:ok, _updated} ->
+            {:reply, {:ok, %{
+              "type" => "task",
+              "event" => "claimed",
+              "payload" => %{
+                "task_id" => task_id,
+                "prompt" => task.prompt,
+                "type" => task.type,
+                "priority" => Atom.to_string(task.priority),
+                "capabilities_required" => task.capabilities_required,
+                "correlation_id" => task.correlation_id
+              }
+            }}, socket}
+
+          {:error, reason} ->
+            {:reply, {:error, %{reason: "claim_failed", message: inspect(reason)}}, socket}
+        end
+
+      {:ok, %{assigned_to: other}} when not is_nil(other) ->
+        {:reply, {:error, %{
+          reason: "not_assigned_to_you",
+          message: "Task #{task_id} is assigned to #{other}, not #{agent_id}."
+        }}, socket}
+
+      {:ok, %{status: status}} ->
+        {:reply, {:error, %{reason: "invalid_status", message: "Task is #{status}, not assigned."}}, socket}
+
+      :not_found ->
+        {:reply, {:error, %{reason: "not_found", message: "Task #{task_id} not found."}}, socket}
+    end
+  end
+
+  def handle_in("task:claim", _payload, socket) do
+    {:reply, {:error, %{reason: "payload must include \"task_id\""}}, socket}
+  end
+
+  def handle_in("task:result", %{"payload" => payload}, socket) do
+    task_id = payload["task_id"]
+    agent_id = socket.assigns.agent_id
+
+    case Hub.Task.get(task_id) do
+      {:ok, %{assigned_to: ^agent_id, status: status} = _task} when status in [:assigned, :running] ->
+        error = payload["error"]
+
+        if error do
+          case Hub.Task.fail(task_id, error) do
+            {:ok, failed_task} ->
+              Hub.TaskSupervisor.push_task_result(failed_task)
+              {:reply, {:ok, %{
+                "type" => "task",
+                "event" => "failed",
+                "payload" => %{"task_id" => task_id, "status" => "failed"}
+              }}, socket}
+
+            {:error, reason} ->
+              {:reply, {:error, %{reason: inspect(reason)}}, socket}
+          end
+        else
+          result = payload["result"] || %{}
+
+          case Hub.Task.complete(task_id, result) do
+            {:ok, completed_task} ->
+              Hub.TaskSupervisor.push_task_result(completed_task)
+              {:reply, {:ok, %{
+                "type" => "task",
+                "event" => "completed",
+                "payload" => %{"task_id" => task_id, "status" => "completed"}
+              }}, socket}
+
+            {:error, reason} ->
+              {:reply, {:error, %{reason: inspect(reason)}}, socket}
+          end
+        end
+
+      {:ok, %{assigned_to: other}} when not is_nil(other) ->
+        {:reply, {:error, %{reason: "not_assigned_to_you"}}, socket}
+
+      {:ok, %{status: status}} ->
+        {:reply, {:error, %{reason: "invalid_status", message: "Task is #{status}."}}, socket}
+
+      :not_found ->
+        {:reply, {:error, %{reason: "not_found"}}, socket}
+    end
+  end
+
+  def handle_in("task:result", payload, socket) when is_map(payload) do
+    handle_in("task:result", %{"payload" => payload}, socket)
+  end
+
+  def handle_in("task:status", %{"payload" => %{"task_id" => task_id}}, socket) do
+    case Hub.Task.get(task_id) do
+      {:ok, task} ->
+        {:reply, {:ok, %{
+          "type" => "task",
+          "event" => "status",
+          "payload" => Hub.Task.to_map(task)
+        }}, socket}
+
+      :not_found ->
+        {:reply, {:error, %{reason: "not_found", message: "Task #{task_id} not found."}}, socket}
+    end
+  end
+
+  def handle_in("task:status", _payload, socket) do
+    {:reply, {:error, %{reason: "payload must include \"task_id\""}}, socket}
+  end
+
   # ── Groups ──────────────────────────────────────────────────
 
   def handle_in("group:create", %{"payload" => payload} = raw, socket) do
@@ -915,6 +1099,235 @@ defmodule Hub.FleetChannel do
       "payload" => invite
     })
     {:noreply, socket}
+  end
+
+  # ── Files ────────────────────────────────────────────────────
+
+  def handle_in("file:upload_url", %{"payload" => payload}, socket) do
+    filename = Map.get(payload, "filename")
+    size = Map.get(payload, "size")
+    content_type = Map.get(payload, "content_type", "application/octet-stream")
+
+    cond do
+      is_nil(filename) or filename == "" ->
+        {:reply, {:error, %{
+          reason: "missing_filename",
+          message: "Upload requires a 'filename' field.",
+          fix: "Add payload.filename with the file name."
+        }}, socket}
+
+      is_nil(size) or not is_integer(size) or size <= 0 ->
+        {:reply, {:error, %{
+          reason: "invalid_size",
+          message: "Upload requires a positive integer 'size' (bytes).",
+          fix: "Add payload.size with the file size in bytes."
+        }}, socket}
+
+      not quota_ok?(socket.assigns.tenant_id, :messages_today) ->
+        {:reply, {:error, %{
+          reason: "quota_exceeded",
+          resource: "messages_today",
+          message: "Daily message quota reached.",
+          fix: "Wait until quota resets or upgrade your plan."
+        }}, socket}
+
+      true ->
+        Hub.Quota.increment(socket.assigns.tenant_id, :messages_today)
+
+        case Hub.Files.upload_url(
+               filename,
+               size,
+               content_type,
+               socket.assigns.agent_id,
+               socket.assigns.tenant_id,
+               socket.assigns.fleet_id
+             ) do
+          {:ok, result} ->
+            {:reply, {:ok, %{
+              "type" => "file",
+              "event" => "upload_url",
+              "payload" => result
+            }}, socket}
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, socket}
+        end
+    end
+  end
+
+  def handle_in("file:upload_url", payload, socket) when is_map(payload) do
+    handle_in("file:upload_url", %{"payload" => payload}, socket)
+  end
+
+  def handle_in("file:register", %{"payload" => payload}, socket) do
+    file_id = Map.get(payload, "file_id")
+
+    if is_nil(file_id) or file_id == "" do
+      {:reply, {:error, %{
+        reason: "missing_file_id",
+        message: "Register requires a 'file_id' field.",
+        fix: "Use the file_id returned from file:upload_url."
+      }}, socket}
+    else
+      case Hub.Files.register(file_id, socket.assigns.tenant_id, payload) do
+        {:ok, file} ->
+          file_data = Hub.Files.file_to_map(file)
+
+          # Broadcast file availability to the fleet
+          broadcast!(socket, "file:shared", %{
+            "type" => "file",
+            "event" => "shared",
+            "payload" => Map.merge(file_data, %{
+              "from" => %{
+                "agent_id" => socket.assigns.agent_id,
+                "name" => get_agent_name(socket)
+              }
+            })
+          })
+
+          # Publish to EventBus for durability
+          fleet_id = socket.assigns.fleet_id
+          bus_topic = "ringforge.#{fleet_id}.activity"
+          Task.start(fn ->
+            Hub.EventBus.publish(bus_topic, %{
+              "kind" => "file_shared",
+              "file_id" => file_id,
+              "filename" => file.filename,
+              "agent_id" => socket.assigns.agent_id,
+              "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+            })
+          end)
+
+          {:reply, {:ok, %{
+            "type" => "file",
+            "event" => "registered",
+            "payload" => file_data
+          }}, socket}
+
+        {:error, reason} ->
+          {:reply, {:error, reason}, socket}
+      end
+    end
+  end
+
+  def handle_in("file:register", payload, socket) when is_map(payload) do
+    handle_in("file:register", %{"payload" => payload}, socket)
+  end
+
+  def handle_in("file:download_url", %{"payload" => %{"file_id" => file_id}}, socket) do
+    case Hub.Files.download_url(file_id, socket.assigns.tenant_id) do
+      {:ok, result} ->
+        {:reply, {:ok, %{
+          "type" => "file",
+          "event" => "download_url",
+          "payload" => result
+        }}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, socket}
+    end
+  end
+
+  def handle_in("file:download_url", _payload, socket) do
+    {:reply, {:error, %{reason: "missing_file_id", message: "Payload must include 'file_id'."}}, socket}
+  end
+
+  def handle_in("file:list", %{"payload" => payload}, socket) do
+    opts =
+      []
+      |> maybe_opt(:limit, Map.get(payload, "limit"))
+      |> maybe_opt(:offset, Map.get(payload, "offset"))
+      |> maybe_opt(:tags, Map.get(payload, "tags"))
+      |> maybe_opt(:agent_id, Map.get(payload, "agent_id"))
+      |> maybe_opt(:content_type, Map.get(payload, "content_type"))
+
+    {:ok, files} = Hub.Files.list(socket.assigns.fleet_id, socket.assigns.tenant_id, opts)
+
+    {:reply, {:ok, %{
+      "type" => "file",
+      "event" => "list",
+      "payload" => %{"files" => files, "count" => length(files)}
+    }}, socket}
+  end
+
+  def handle_in("file:list", _payload, socket) do
+    handle_in("file:list", %{"payload" => %{}}, socket)
+  end
+
+  def handle_in("file:delete", %{"payload" => %{"file_id" => file_id}}, socket) do
+    case Hub.Files.delete(file_id, socket.assigns.tenant_id, socket.assigns.agent_id) do
+      :ok ->
+        # Broadcast file deletion to the fleet
+        broadcast!(socket, "file:deleted", %{
+          "type" => "file",
+          "event" => "deleted",
+          "payload" => %{
+            "file_id" => file_id,
+            "deleted_by" => socket.assigns.agent_id
+          }
+        })
+
+        {:reply, {:ok, %{deleted: true, file_id: file_id}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, socket}
+    end
+  end
+
+  def handle_in("file:delete", _payload, socket) do
+    {:reply, {:error, %{reason: "missing_file_id", message: "Payload must include 'file_id'."}}, socket}
+  end
+
+  # ── auth:rotate_key — rotate Ed25519 public key ─────────────
+
+  def handle_in("auth:rotate_key", %{"payload" => %{"public_key" => pk_base64}}, socket) do
+    case Hub.Crypto.decode_public_key(pk_base64) do
+      {:ok, pk_bytes} ->
+        case Auth.find_agent(socket.assigns.agent_id) do
+          {:ok, agent} ->
+            case Auth.update_public_key(agent, pk_bytes) do
+              {:ok, _updated} ->
+                Logger.info("[FleetChannel] Public key rotated for #{socket.assigns.agent_id}")
+
+                {:reply, {:ok, %{
+                  "type" => "auth",
+                  "event" => "key_rotated",
+                  "payload" => %{
+                    "agent_id" => socket.assigns.agent_id,
+                    "public_key" => pk_base64,
+                    "rotated_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+                  }
+                }}, socket}
+
+              {:error, reason} ->
+                {:reply, {:error, %{
+                  reason: "key_rotation_failed",
+                  message: "Failed to update public key: #{inspect(reason)}"
+                }}, socket}
+            end
+
+          {:error, _} ->
+            {:reply, {:error, %{
+              reason: "agent_not_found",
+              message: "Could not find agent record."
+            }}, socket}
+        end
+
+      {:error, _} ->
+        {:reply, {:error, %{
+          reason: "invalid_public_key",
+          message: "Public key must be a valid base64-encoded 32-byte Ed25519 key.",
+          fix: "Ensure the key is exactly 32 bytes and base64-encoded."
+        }}, socket}
+    end
+  end
+
+  def handle_in("auth:rotate_key", _payload, socket) do
+    {:reply, {:error, %{
+      reason: "missing_public_key",
+      message: "Payload must include 'public_key' (base64-encoded Ed25519 public key).",
+      fix: "Send auth:rotate_key with payload.public_key set to the new base64 key."
+    }}, socket}
   end
 
   # ── Terminate — cleanup on disconnect ──────────────────────
