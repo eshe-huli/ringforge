@@ -10,7 +10,12 @@ defmodule Hub.Endpoint do
 
   # Agent WebSocket transport
   socket "/ws", Hub.Socket,
-    websocket: [timeout: 45_000],
+    websocket: [
+      timeout: 45_000,
+      check_origin: false,
+      connect_info: [:peer_data, :x_headers],
+      serializer: [{Phoenix.Socket.V2.JSONSerializer, "~> 2.0.0"}]
+    ],
     longpoll: false
 
   # LiveView WebSocket transport

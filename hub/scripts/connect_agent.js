@@ -149,58 +149,17 @@ function connect() {
   });
 }
 
-async function resolveFleetAndJoin() {
-  // Use the admin API to resolve fleet_id, or just try to discover it
-  // via an HTTP call to /api/health or similar.
-  // 
-  // Simplest: the API key's fleet is embedded. Let's query the admin API.
-  try {
-    const http = require("https");
-    const url = `${config.url.replace("wss://", "https://").replace("ws://", "http://")}/api/keys/resolve?key=${encodeURIComponent(config.apiKey)}`;
-    
-    // If there's no resolve endpoint, we need to know the fleet_id.
-    // Let's just use the fleet_id from the environment or try common ones.
-    const fleetId = process.env.RINGFORGE_FLEET_ID || "";
-    
-    if (fleetId) {
-      joinFleet(fleetId);
-    } else {
-      // Try to get fleet from /api/fleets with the key
-      // For now, let's just print instructions
-      console.log("ℹ️  Fleet ID not specified. Trying to discover...");
-      
-      // The Phoenix socket already has fleet_id in assigns after connect.
-      // We can try joining with a placeholder and catch the error,
-      // or better: make a quick HTTP request.
-      
-      // Let's try the admin endpoint
-      const adminUrl = config.url.replace("wss://", "https://").replace("ws://", "http://");
-      const resp = await fetch(`${adminUrl}/api/admin/fleets`, {
-        headers: { "x-api-key": config.apiKey }
-      });
-      
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data.fleets && data.fleets.length > 0) {
-          joinFleet(data.fleets[0].id);
-          return;
-        }
-      }
-      
-      // Fallback: the socket already knows our fleet. We need a way to discover it.
-      // Let's add a system channel for this.
-      console.log("⚠️  Could not auto-discover fleet ID.");
-      console.log("   Pass it via: --fleet <fleet-id> or RINGFORGE_FLEET_ID=<id>");
-      console.log("   Find it in the dashboard Settings page.");
-    }
-  } catch (err) {
-    // fetch might not exist in older Node. Use fleet from env.
-    const fleetId = process.env.RINGFORGE_FLEET_ID || process.argv.find((a, i) => process.argv[i - 1] === "--fleet");
-    if (fleetId) {
-      joinFleet(fleetId);
-    } else {
-      console.error("❌ Cannot discover fleet ID. Pass --fleet <id>");
-    }
+function resolveFleetAndJoin() {
+  const fleetId = process.env.RINGFORGE_FLEET_ID
+    || process.argv.find((a, i) => process.argv[i - 1] === "--fleet")
+    || "";
+
+  if (fleetId) {
+    joinFleet(fleetId);
+  } else {
+    console.error("❌ Fleet ID required. Pass --fleet <id> or set RINGFORGE_FLEET_ID");
+    console.log("   Find it in the dashboard Settings page.");
+    process.exit(1);
   }
 }
 
