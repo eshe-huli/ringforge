@@ -68,7 +68,8 @@ defmodule Hub.Live.DashboardLive do
           wizard_live_key: nil,
           wizard_waiting: false,
           wizard_connected_agent: nil,
-          wizard_agent_count_at_open: 0
+          wizard_agent_count_at_open: 0,
+          theme: "system"
         )
 
         if connected?(socket) do
@@ -261,6 +262,9 @@ defmodule Hub.Live.DashboardLive do
   # Filter / Search / Sort
   def handle_event("set_filter", %{"filter" => f}, socket), do: {:noreply, assign(socket, filter: f)}
   def handle_event("update_search", %{"value" => v}, socket), do: {:noreply, assign(socket, search_query: v)}
+  def handle_event("set_theme", %{"theme" => theme}, socket) when theme in ["light", "dark", "system"] do
+    {:noreply, push_event(assign(socket, theme: theme), "set-theme", %{theme: theme})}
+  end
   def handle_event("sort_agents", %{"column" => col}, socket) do
     col = String.to_existing_atom(col)
     dir = if socket.assigns.sort_by == col && socket.assigns.sort_dir == :asc, do: :desc, else: :asc
@@ -1679,11 +1683,16 @@ defmodule Hub.Live.DashboardLive do
   defp render_settings(assigns) do
     ~H"""
     <div class="h-full overflow-y-auto p-6 animate-fade-in">
-      <div class="max-w-2xl">
+      <div class="w-full">
         <div class="mb-6">
           <h2 class="text-lg font-semibold text-zinc-100">Settings</h2>
           <p class="text-sm text-zinc-500">Fleet configuration and API key management</p>
         </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+        <%!-- LEFT COLUMN --%>
+        <div class="space-y-4">
 
         <%!-- Fleet Info (editable) --%>
         <.card class="bg-zinc-900 border-zinc-800 mb-4">
@@ -1903,6 +1912,11 @@ defmodule Hub.Live.DashboardLive do
           </.card_content>
         </.card>
 
+        </div><%!-- end LEFT COLUMN --%>
+
+        <%!-- RIGHT COLUMN --%>
+        <div class="space-y-4">
+
         <%!-- Connect Agents Guide --%>
         <.card class="bg-zinc-900 border-zinc-800 mb-4">
           <.card_header class="pb-2">
@@ -1971,22 +1985,58 @@ defmodule Hub.Live.DashboardLive do
           </.card_content>
         </.card>
 
-        <%!-- Keyboard shortcuts --%>
-        <.card class="bg-zinc-900 border-zinc-800">
-          <.card_header class="pb-2">
-            <.card_title class="text-sm font-medium text-zinc-300">Keyboard Shortcuts</.card_title>
-          </.card_header>
-          <.card_content>
-            <div class="grid grid-cols-2 gap-1.5 text-xs">
-              <%= for {key, desc} <- [{"⌘K", "Command palette"}, {"1", "Dashboard"}, {"2", "Agents"}, {"3", "Activity"}, {"4", "Messaging"}, {"5", "Quotas"}, {"6", "Settings"}] do %>
-                <div class="flex items-center gap-2 py-1.5">
-                  <kbd class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-400 text-[10px] font-mono min-w-[24px] text-center"><%= key %></kbd>
-                  <span class="text-zinc-500"><%= desc %></span>
-                </div>
-              <% end %>
-            </div>
-          </.card_content>
-        </.card>
+        </div><%!-- end RIGHT COLUMN --%>
+      </div><%!-- end grid --%>
+
+        <%!-- Full-width cards below the grid --%>
+        <div class="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <%!-- Theme --%>
+          <.card class="bg-zinc-900 border-zinc-800">
+            <.card_header class="pb-2">
+              <.card_title class="text-sm font-medium text-zinc-300">Appearance</.card_title>
+              <.card_description>Customize the dashboard theme</.card_description>
+            </.card_header>
+            <.card_content>
+              <div class="flex items-center gap-2">
+                <%= for {mode, label, icon_svg} <- [
+                  {"light", "Light", ~s(<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>)},
+                  {"dark", "Dark", ~s(<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>)},
+                  {"system", "System", ~s(<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>)}
+                ] do %>
+                  <button
+                    phx-click="set_theme"
+                    phx-value-theme={mode}
+                    class={"flex items-center gap-2 px-4 py-2.5 rounded-lg border text-xs font-medium transition-all " <>
+                      if(@theme == mode,
+                        do: "bg-amber-500/15 border-amber-500/40 text-amber-400",
+                        else: "bg-zinc-800/50 border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600"
+                      )}
+                  >
+                    <%= Phoenix.HTML.raw(icon_svg) %>
+                    <%= label %>
+                  </button>
+                <% end %>
+              </div>
+            </.card_content>
+          </.card>
+
+          <%!-- Keyboard shortcuts --%>
+          <.card class="bg-zinc-900 border-zinc-800">
+            <.card_header class="pb-2">
+              <.card_title class="text-sm font-medium text-zinc-300">Keyboard Shortcuts</.card_title>
+            </.card_header>
+            <.card_content>
+              <div class="grid grid-cols-2 gap-1.5 text-xs">
+                <%= for {key, desc} <- [{"⌘K", "Command palette"}, {"1", "Dashboard"}, {"2", "Agents"}, {"3", "Activity"}, {"4", "Messaging"}, {"5", "Quotas"}, {"6", "Settings"}] do %>
+                  <div class="flex items-center gap-2 py-1.5">
+                    <kbd class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-400 text-[10px] font-mono min-w-[24px] text-center"><%= key %></kbd>
+                    <span class="text-zinc-500"><%= desc %></span>
+                  </div>
+                <% end %>
+              </div>
+            </.card_content>
+          </.card>
+        </div>
       </div>
     </div>
     """

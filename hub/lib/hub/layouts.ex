@@ -226,7 +226,7 @@ defmodule Hub.Layouts do
           }
         </style>
       </head>
-      <body class="h-full font-mono antialiased">
+      <body class="h-full font-mono antialiased" id="rf-body" phx-hook="ThemeManager">
         <%= @inner_content %>
         <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/phoenix@1.8.3/priv/static/phoenix.min.js"></script>
         <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/phoenix_live_view@1.1.22/priv/static/phoenix_live_view.min.js"></script>
@@ -255,6 +255,34 @@ defmodule Hub.Layouts do
             },
             destroyed() {
               window.removeEventListener('keydown', this.handler)
+            }
+          }
+
+          // Theme management
+          Hooks.ThemeManager = {
+            mounted() {
+              this.handleEvent("set-theme", ({theme}) => {
+                localStorage.setItem("rf-theme", theme);
+                this.applyTheme(theme);
+              });
+              // Apply saved theme on mount
+              const saved = localStorage.getItem("rf-theme") || "system";
+              this.applyTheme(saved);
+            },
+            applyTheme(theme) {
+              const html = document.documentElement;
+              if (theme === "dark") {
+                html.classList.add("dark");
+              } else if (theme === "light") {
+                html.classList.remove("dark");
+              } else {
+                // system
+                if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+                  html.classList.add("dark");
+                } else {
+                  html.classList.remove("dark");
+                }
+              }
             }
           }
 
