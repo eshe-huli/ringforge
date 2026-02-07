@@ -32,5 +32,6 @@ defmodule Hub.Auth.Agent do
     |> cast(attrs, [:agent_id, :name, :public_key, :framework, :capabilities, :last_seen_at, :tenant_id, :fleet_id, :registered_via_key_id])
     |> validate_required([:agent_id, :tenant_id, :fleet_id])
     |> unique_constraint(:agent_id)
+    |> unique_constraint([:name, :fleet_id], name: :agents_name_fleet_id_unique)
   end
 end

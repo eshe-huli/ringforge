@@ -83,44 +83,45 @@ defmodule Hub.Auth do
   def register_agent(%ApiKey{} = api_key, agent_params) do
     fleet_id = api_key.fleet_id || default_fleet_id(api_key.tenant_id)
     name = Map.get(agent_params, :name)
+    agent_id = "ag_#{base62_random(12)}"
 
-    # Try to find existing agent by name + fleet (stable identity across reconnects)
-    existing =
-      if name && name != "" do
-        Repo.one(
-          from a in Agent,
-            where: a.name == ^name and a.fleet_id == ^fleet_id,
-            limit: 1
-        )
-      end
+    attrs =
+      Map.merge(agent_params, %{
+        agent_id: agent_id,
+        tenant_id: api_key.tenant_id,
+        fleet_id: fleet_id,
+        registered_via_key_id: api_key.id,
+        last_seen_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
 
-    case existing do
-      %Agent{} = agent ->
-        # Reconnect: update metadata and touch last_seen
-        update_attrs =
-          agent_params
-          |> Map.put(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
-
-        agent
-        |> Agent.changeset(update_attrs)
-        |> Repo.update()
-
-      nil ->
-        # New agent: generate ID and insert
-        agent_id = "ag_#{base62_random(12)}"
-
-        attrs =
-          Map.merge(agent_params, %{
-            agent_id: agent_id,
-            tenant_id: api_key.tenant_id,
-            fleet_id: fleet_id,
-            registered_via_key_id: api_key.id
+    if name && name != "" do
+      # Named agent: find existing or insert new, atomic
+      case Repo.one(from a in Agent, where: a.name == ^name and a.fleet_id == ^fleet_id, limit: 1) do
+        %Agent{} = existing ->
+          existing
+          |> Agent.changeset(%{
+            framework: Map.get(agent_params, :framework) || existing.framework,
+            capabilities: Map.get(agent_params, :capabilities) || existing.capabilities,
+            last_seen_at: DateTime.utc_now() |> DateTime.truncate(:second)
           })
+          |> Repo.update()
 
-        case %Agent{} |> Agent.changeset(attrs) |> Repo.insert() do
-          {:ok, agent} -> {:ok, agent}
-          {:error, changeset} -> {:error, changeset}
-        end
+        nil ->
+          case %Agent{} |> Agent.changeset(attrs) |> Repo.insert() do
+            {:ok, agent} ->
+              {:ok, agent}
+
+            {:error, %Ecto.Changeset{errors: _}} ->
+              # Race condition: another connection inserted first. Retry find.
+              case Repo.one(from a in Agent, where: a.name == ^name and a.fleet_id == ^fleet_id, limit: 1) do
+                %Agent{} = agent -> {:ok, agent}
+                nil -> {:error, :registration_failed}
+              end
+          end
+      end
+    else
+      # Unnamed agent: always create new
+      %Agent{} |> Agent.changeset(attrs) |> Repo.insert()
     end
   end
 
