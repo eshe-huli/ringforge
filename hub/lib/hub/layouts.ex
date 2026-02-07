@@ -59,7 +59,32 @@ defmodule Hub.Layouts do
         <style>
           @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
 
+          /* ── Light Theme (default) ──────────────── */
           :root {
+            --background: 0 0% 100%;
+            --foreground: 240 10% 3.9%;
+            --card: 0 0% 100%;
+            --card-foreground: 240 10% 3.9%;
+            --popover: 0 0% 100%;
+            --popover-foreground: 240 10% 3.9%;
+            --primary: 240 5.9% 10%;
+            --primary-foreground: 0 0% 98%;
+            --secondary: 240 4.8% 95.9%;
+            --secondary-foreground: 240 5.9% 10%;
+            --muted: 240 4.8% 95.9%;
+            --muted-foreground: 240 3.8% 46.1%;
+            --accent: 240 4.8% 95.9%;
+            --accent-foreground: 240 5.9% 10%;
+            --destructive: 0 84.2% 60.2%;
+            --destructive-foreground: 0 0% 98%;
+            --border: 240 5.9% 90%;
+            --input: 240 5.9% 90%;
+            --ring: 240 5.9% 10%;
+            --radius: 0.5rem;
+          }
+
+          /* ── Dark Theme ─────────────────────────── */
+          .dark {
             --background: 240 10% 3.9%;
             --foreground: 0 0% 98%;
             --card: 240 10% 3.9%;
@@ -79,13 +104,53 @@ defmodule Hub.Layouts do
             --border: 240 3.7% 15.9%;
             --input: 240 3.7% 15.9%;
             --ring: 240 4.9% 83.9%;
-            --radius: 0.5rem;
           }
 
           body {
             background: hsl(var(--background));
             color: hsl(var(--foreground));
           }
+
+          /* ── Light mode overrides for hardcoded dark classes ── */
+          :root:not(.dark) .bg-zinc-900 { background-color: #ffffff !important; }
+          :root:not(.dark) .bg-zinc-950 { background-color: #f8fafc !important; }
+          :root:not(.dark) .bg-zinc-800 { background-color: #f1f5f9 !important; }
+          :root:not(.dark) .bg-zinc-800\/30 { background-color: rgba(241,245,249,0.5) !important; }
+          :root:not(.dark) .bg-zinc-800\/50 { background-color: rgba(241,245,249,0.7) !important; }
+          :root:not(.dark) .hover\:bg-zinc-800\/50:hover { background-color: rgba(241,245,249,0.8) !important; }
+          :root:not(.dark) .hover\:bg-zinc-800:hover { background-color: #e2e8f0 !important; }
+          :root:not(.dark) .border-zinc-800 { border-color: #e2e8f0 !important; }
+          :root:not(.dark) .border-zinc-800\/50 { border-color: rgba(226,232,240,0.7) !important; }
+          :root:not(.dark) .border-zinc-700 { border-color: #cbd5e1 !important; }
+          :root:not(.dark) .divide-zinc-800\/50 > :not([hidden]) ~ :not([hidden]) { border-color: rgba(226,232,240,0.7) !important; }
+          :root:not(.dark) .text-zinc-100 { color: #0f172a !important; }
+          :root:not(.dark) .text-zinc-200 { color: #1e293b !important; }
+          :root:not(.dark) .text-zinc-300 { color: #334155 !important; }
+          :root:not(.dark) .text-zinc-400 { color: #64748b !important; }
+          :root:not(.dark) .text-zinc-500 { color: #64748b !important; }
+          :root:not(.dark) .text-zinc-600 { color: #94a3b8 !important; }
+          :root:not(.dark) .hover\:text-zinc-300:hover { color: #334155 !important; }
+          :root:not(.dark) .hover\:text-zinc-200:hover { color: #1e293b !important; }
+          :root:not(.dark) .placeholder\:text-zinc-600::placeholder { color: #94a3b8 !important; }
+          :root:not(.dark) .bg-amber-500\/10 { background-color: rgba(245,158,11,0.08) !important; }
+          :root:not(.dark) .bg-amber-500\/15 { background-color: rgba(245,158,11,0.1) !important; }
+          :root:not(.dark) .bg-green-500\/10 { background-color: rgba(34,197,94,0.08) !important; }
+          :root:not(.dark) .bg-red-500\/10 { background-color: rgba(239,68,68,0.08) !important; }
+
+          /* Sidebar light mode */
+          :root:not(.dark) .bg-grid { background-image: radial-gradient(circle at 1px 1px, rgba(0,0,0,0.04) 1px, transparent 0); background-size: 32px 32px; }
+          :root:not(.dark) .bg-radial-glow { background: radial-gradient(ellipse at 50% 0%, rgba(245,158,11,0.08) 0%, transparent 60%); }
+          :root:not(.dark) .glass-card { background: rgba(255,255,255,0.85); backdrop-filter: blur(12px); border: 1px solid rgba(226,232,240,0.8); }
+          :root:not(.dark) .glass-card:hover { background: rgba(255,255,255,0.95); border-color: rgba(203,213,225,0.9); }
+
+          /* Scrollbar light mode */
+          :root:not(.dark) ::-webkit-scrollbar-track { background: #f1f5f9; }
+          :root:not(.dark) ::-webkit-scrollbar-thumb { background: #cbd5e1; }
+          :root:not(.dark) ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+          :root:not(.dark) * { scrollbar-color: #cbd5e1 #f1f5f9; }
+
+          /* Selection light mode */
+          :root:not(.dark) ::selection { background: rgba(245,158,11,0.2); }
 
           /* ── Background Grid ─────────────────────── */
           .bg-grid {
