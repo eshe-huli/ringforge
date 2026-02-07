@@ -44,13 +44,22 @@ defmodule Hub.FleetChannel do
     # Verify the socket's fleet_id matches the requested topic
     cond do
       socket.assigns.fleet_id != fleet_id ->
-        {:error, %{reason: "fleet_id mismatch"}}
+        {:error, %{
+          reason: "fleet_id_mismatch",
+          message: "Your API key belongs to fleet '#{socket.assigns.fleet_id}', but you tried to join 'fleet:#{fleet_id}'.",
+          fix: "Set RINGFORGE_FLEET_ID=#{socket.assigns.fleet_id} or pass --fleet #{socket.assigns.fleet_id}",
+          your_fleet_id: socket.assigns.fleet_id
+        }}
 
       not quota_ok?(socket.assigns.tenant_id, :connected_agents) ->
-        {:error, %{reason: "quota_exceeded", resource: "connected_agents"}}
+        {:error, %{
+          reason: "quota_exceeded",
+          resource: "connected_agents",
+          message: "Agent connection limit reached for your plan.",
+          fix: "Disconnect idle agents or upgrade your plan. Check usage at /dashboard → Quotas."
+        }}
 
       true ->
-        # Increment connected_agents quota on successful join
         Hub.Quota.increment(socket.assigns.tenant_id, :connected_agents)
         send(self(), {:after_join, payload})
         {:ok, socket}
@@ -170,7 +179,11 @@ defmodule Hub.FleetChannel do
     state = Map.get(update_payload, "state")
 
     if state && state not in @valid_states do
-      {:reply, {:error, %{reason: "invalid state, must be one of: #{Enum.join(@valid_states, ", ")}"}}, socket}
+      {:reply, {:error, %{
+        reason: "invalid_state",
+        message: "State '#{state}' is not valid. Must be one of: #{Enum.join(@valid_states, ", ")}.",
+        fix: "Send presence:update with payload.state set to 'online', 'busy', 'away', or 'offline'."
+      }}, socket}
     else
       # Get current meta and merge updates
       current_meta = get_current_meta(socket)
@@ -226,10 +239,19 @@ defmodule Hub.FleetChannel do
 
     cond do
       kind not in @valid_activity_kinds ->
-        {:reply, {:error, %{reason: "invalid kind, must be one of: #{Enum.join(@valid_activity_kinds, ", ")}"}}, socket}
+        {:reply, {:error, %{
+          reason: "invalid_activity_kind",
+          message: "Activity kind '#{kind}' is not valid. Must be one of: #{Enum.join(@valid_activity_kinds, ", ")}.",
+          fix: "Set payload.kind to a valid value. Use 'custom' for generic events."
+        }}, socket}
 
       not quota_ok?(socket.assigns.tenant_id, :messages_today) ->
-        {:reply, {:error, %{reason: "quota_exceeded", resource: "messages_today"}}, socket}
+        {:reply, {:error, %{
+          reason: "quota_exceeded",
+          resource: "messages_today",
+          message: "Daily message quota reached.",
+          fix: "Wait until quota resets or upgrade your plan. Check usage at /dashboard → Quotas."
+        }}, socket}
 
       true ->
         Hub.Quota.increment(socket.assigns.tenant_id, :messages_today)
@@ -373,10 +395,19 @@ defmodule Hub.FleetChannel do
 
     cond do
       is_nil(key) or key == "" ->
-        {:reply, {:error, %{reason: "key is required"}}, socket}
+        {:reply, {:error, %{
+          reason: "missing_key",
+          message: "Memory entries require a 'key' field.",
+          fix: "Add payload.key = 'my/key/path' — use forward slashes for namespacing."
+        }}, socket}
 
       not quota_ok?(socket.assigns.tenant_id, :memory_entries) ->
-        {:reply, {:error, %{reason: "quota_exceeded", resource: "memory_entries"}}, socket}
+        {:reply, {:error, %{
+          reason: "quota_exceeded",
+          resource: "memory_entries",
+          message: "Memory entry quota reached.",
+          fix: "Delete unused entries with memory:delete or upgrade your plan."
+        }}, socket}
 
       true ->
         Hub.Quota.increment(socket.assigns.tenant_id, :memory_entries)
@@ -516,13 +547,26 @@ defmodule Hub.FleetChannel do
 
     cond do
       is_nil(to) or to == "" ->
-        {:reply, {:error, %{reason: "\"to\" agent_id is required"}}, socket}
+        {:reply, {:error, %{
+          reason: "missing_recipient",
+          message: "Direct message requires a 'to' field with the target agent_id.",
+          fix: "Add payload.to = 'ag_...' with the recipient's agent ID. Use presence:roster to find agent IDs."
+        }}, socket}
 
       to == socket.assigns.agent_id ->
-        {:reply, {:error, %{reason: "cannot send a message to yourself"}}, socket}
+        {:reply, {:error, %{
+          reason: "self_message",
+          message: "Cannot send a direct message to yourself.",
+          fix: "Use a different agent_id in the 'to' field."
+        }}, socket}
 
       not quota_ok?(socket.assigns.tenant_id, :messages_today) ->
-        {:reply, {:error, %{reason: "quota_exceeded", resource: "messages_today"}}, socket}
+        {:reply, {:error, %{
+          reason: "quota_exceeded",
+          resource: "messages_today",
+          message: "Daily message quota reached.",
+          fix: "Wait until quota resets or upgrade your plan."
+        }}, socket}
 
       true ->
         Hub.Quota.increment(socket.assigns.tenant_id, :messages_today)

@@ -26,7 +26,19 @@ const config = {
 };
 
 if (!config.apiKey) {
-  console.error("❌ No API key. Use --key rf_live_XXX or set RINGFORGE_KEY");
+  console.error("❌ No API key provided.");
+  console.error("   Use: --key rf_live_XXX or set RINGFORGE_KEY=rf_live_XXX");
+  console.error("   Get a key from the dashboard Settings page.");
+  process.exit(1);
+}
+
+if (!config.apiKey.startsWith("rf_live_")) {
+  if (config.apiKey.startsWith("rf_admin_")) {
+    console.error("❌ You're using an admin key (rf_admin_*). Agents need a live key (rf_live_*).");
+    console.error("   Admin keys are for the dashboard only.");
+  } else {
+    console.error("❌ Invalid API key format. Keys start with 'rf_live_' for agents.");
+  }
   process.exit(1);
 }
 
@@ -105,7 +117,16 @@ function connect() {
           onJoined(topic, payload.response);
         }
       } else if (payload.status === "error") {
-        console.error("❌ Error:", topic, payload.response);
+        const err = payload.response || {};
+        console.error(`❌ ${err.message || "Error joining " + topic}`);
+        if (err.fix) console.error(`   Fix: ${err.fix}`);
+        if (err.your_fleet_id) console.error(`   Your fleet ID: ${err.your_fleet_id}`);
+        if (err.reason === "fleet_id_mismatch") {
+          // Auto-retry with correct fleet
+          console.log(`   Auto-retrying with correct fleet...`);
+          joinFleet(err.your_fleet_id);
+          return;
+        }
       }
     } else if (event === "presence:roster") {
       const agents = payload?.payload?.agents || [];
@@ -138,14 +159,48 @@ function connect() {
   });
 
   ws.on("close", (code, reason) => {
-    console.log(`🔌 Disconnected (${code}): ${reason || "no reason"}`);
+    const reasonStr = reason ? reason.toString() : "";
     clearInterval(heartbeatInterval);
-    // Reconnect after 3s
+    
+    switch (code) {
+      case 1000:
+        console.log("🔌 Disconnected normally.");
+        return;
+      case 1008:
+        console.error("❌ Disconnected: policy violation. Your API key may be invalid or revoked.");
+        console.error("   Fix: Check your key with: curl https://ringforge.wejoona.com/api/connect/check?api_key=YOUR_KEY");
+        break;
+      case 1011:
+        console.error("❌ Disconnected: server error. The hub may be restarting or misconfigured.");
+        console.error("   Fix: Check hub health: curl https://ringforge.wejoona.com/api/health");
+        break;
+      case 1006:
+        console.error("❌ Disconnected: connection lost (no close frame).");
+        console.error("   This usually means the server crashed or network dropped.");
+        break;
+      default:
+        console.log(`🔌 Disconnected (${code}): ${reasonStr}`);
+    }
+    
+    console.log("   Reconnecting in 3s...");
     setTimeout(connect, 3000);
   });
 
   ws.on("error", (err) => {
-    console.error("❌ WebSocket error:", err.message);
+    if (err.message.includes("500")) {
+      console.error("❌ Server returned 500. Possible causes:");
+      console.error("   • Missing vsn=2.0.0 in WebSocket URL (protocol mismatch)");
+      console.error("   • Hub is starting up — wait a few seconds");
+      console.error("   • Check: curl https://ringforge.wejoona.com/api/health");
+    } else if (err.message.includes("401") || err.message.includes("403")) {
+      console.error("❌ Authentication failed (${err.message}).");
+      console.error("   Fix: Verify your API key: curl https://ringforge.wejoona.com/api/connect/check?api_key=YOUR_KEY");
+    } else if (err.message.includes("ECONNREFUSED") || err.message.includes("ENOTFOUND")) {
+      console.error("❌ Cannot reach server:", err.message);
+      console.error("   Fix: Check the URL is correct and the hub is running.");
+    } else {
+      console.error("❌ WebSocket error:", err.message);
+    }
   });
 }
 

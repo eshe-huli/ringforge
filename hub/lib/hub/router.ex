@@ -27,6 +27,7 @@ defmodule Hub.Router do
   scope "/api", Hub do
     pipe_through :api
     get "/health", HealthController, :index
+    get "/connect/check", ConnectController, :check
   end
 
   scope "/api/v1", Hub do
