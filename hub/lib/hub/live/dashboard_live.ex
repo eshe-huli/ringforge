@@ -76,7 +76,18 @@ defmodule Hub.Live.DashboardLive do
         {:ok, assign(socket, agents: agents, activities: activities, usage: usage, registered_agents: registered)}
 
       {:error, :unauthenticated} ->
-        {:ok, assign(socket, authenticated: false, auth_error: nil, key_input: "")}
+        # Read error/tab from URL params (set by SessionController redirect)
+        auth_error = params["error"]
+        auth_tab = params["tab"] || "login"
+        {:ok, assign(socket,
+          authenticated: false,
+          auth_error: auth_error,
+          auth_tab: auth_tab,
+          key_input: "",
+          register_name: "",
+          register_email: "",
+          login_email: ""
+        )}
     end
   end
 
@@ -119,6 +130,11 @@ defmodule Hub.Live.DashboardLive do
       {:error, _} ->
         {:noreply, assign(socket, auth_error: "Invalid admin API key")}
     end
+  end
+
+  # Auth tab switching
+  def handle_event("switch_auth_tab", %{"tab" => tab}, socket) do
+    {:noreply, assign(socket, auth_tab: tab, auth_error: nil)}
   end
 
   # Navigation
@@ -245,11 +261,7 @@ defmodule Hub.Live.DashboardLive do
   # ── Logout ─────────────────────────────────────────────────
 
   def handle_event("logout", _, socket) do
-    {:noreply, assign(socket,
-      authenticated: false, auth_error: nil, key_input: "",
-      tenant_id: nil, fleet_id: nil, fleet_name: nil, plan: nil,
-      agents: %{}, activities: [], usage: %{}, registered_agents: []
-    )}
+    {:noreply, redirect(socket, to: "/auth/logout")}
   end
 
   # ── Activity: click to open agent ──────────────────────────
@@ -517,47 +529,183 @@ defmodule Hub.Live.DashboardLive do
 
   defp render_login(assigns) do
     ~H"""
-    <div class="min-h-screen flex items-center justify-center bg-zinc-950 bg-grid bg-radial-glow">
-      <.card class="w-full max-w-sm bg-zinc-900/95 backdrop-blur-sm border-zinc-800 shadow-2xl animate-fade-in-up">
-        <.card_header class="text-center pb-2">
-          <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-amber-500/15 border border-amber-500/25 mb-4 mx-auto">
-            <Icons.zap class="w-6 h-6 text-amber-400" />
+    <div class="min-h-screen flex items-center justify-center bg-zinc-950 bg-grid bg-radial-glow p-4">
+      <div class="w-full max-w-md animate-fade-in-up">
+        <%!-- Logo & branding --%>
+        <div class="text-center mb-8">
+          <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-500/25 mb-4">
+            <Icons.zap class="w-7 h-7 text-amber-400" />
           </div>
-          <.card_title class="text-xl">
-            <span>Ring</span><span class="text-amber-400">Forge</span>
-          </.card_title>
-          <.card_description>Agent Coordination Mesh</.card_description>
-        </.card_header>
-        <.card_content>
-          <form phx-submit="authenticate" class="space-y-4">
-            <div>
-              <label class="text-xs text-zinc-400 mb-1.5 block">Admin API Key</label>
-              <.input
-                type="password"
-                name="key"
-                value={@key_input}
-                placeholder="rf_admin_..."
-                autocomplete="off"
-                class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
-              />
+          <h1 class="text-2xl font-bold tracking-tight">
+            <span class="text-zinc-100">Ring</span><span class="text-amber-400">Forge</span>
+          </h1>
+          <p class="text-sm text-zinc-500 mt-1">Agent Coordination Mesh</p>
+        </div>
+
+        <.card class="bg-zinc-900/95 backdrop-blur-sm border-zinc-800 shadow-2xl">
+          <.card_content class="pt-6">
+            <%!-- Tab bar --%>
+            <div class="flex border-b border-zinc-800 mb-6 -mx-1">
+              <button
+                phx-click="switch_auth_tab" phx-value-tab="login"
+                class={"flex-1 pb-3 text-sm font-medium border-b-2 transition-colors mx-1 " <>
+                  if(@auth_tab == "login",
+                    do: "border-amber-400 text-amber-400",
+                    else: "border-transparent text-zinc-500 hover:text-zinc-300")}
+              >
+                Sign In
+              </button>
+              <button
+                phx-click="switch_auth_tab" phx-value-tab="register"
+                class={"flex-1 pb-3 text-sm font-medium border-b-2 transition-colors mx-1 " <>
+                  if(@auth_tab == "register",
+                    do: "border-amber-400 text-amber-400",
+                    else: "border-transparent text-zinc-500 hover:text-zinc-300")}
+              >
+                Register
+              </button>
+              <button
+                phx-click="switch_auth_tab" phx-value-tab="apikey"
+                class={"flex-1 pb-3 text-sm font-medium border-b-2 transition-colors mx-1 " <>
+                  if(@auth_tab == "apikey",
+                    do: "border-amber-400 text-amber-400",
+                    else: "border-transparent text-zinc-500 hover:text-zinc-300")}
+              >
+                API Key
+              </button>
             </div>
 
+            <%!-- Error message --%>
             <%= if @auth_error do %>
-              <div class="flex items-center gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg py-2 px-3 animate-fade-in">
-                <span>✕</span>
+              <div class="flex items-center gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg py-2.5 px-3 mb-4 animate-fade-in">
+                <Icons.alert_triangle class="w-4 h-4 flex-shrink-0" />
                 <span><%= @auth_error %></span>
               </div>
             <% end %>
 
-            <.button
-              type="submit"
-              class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold"
-            >
-              Sign in
-            </.button>
-          </form>
-        </.card_content>
-      </.card>
+            <%!-- Login tab --%>
+            <%= if @auth_tab == "login" do %>
+              <form action="/auth/login" method="post" class="space-y-4 animate-fade-in">
+                <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Email</label>
+                  <.input
+                    type="email"
+                    name="email"
+                    value={@login_email}
+                    placeholder="you@example.com"
+                    autocomplete="email"
+                    required
+                    class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                  />
+                </div>
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Password</label>
+                  <.input
+                    type="password"
+                    name="password"
+                    placeholder="••••••••"
+                    autocomplete="current-password"
+                    required
+                    class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                  />
+                </div>
+                <.button
+                  type="submit"
+                  class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold h-10"
+                >
+                  <Icons.log_in class="w-4 h-4 mr-2" />
+                  Sign In
+                </.button>
+              </form>
+            <% end %>
+
+            <%!-- Register tab --%>
+            <%= if @auth_tab == "register" do %>
+              <form action="/auth/register" method="post" class="space-y-4 animate-fade-in">
+                <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Organization Name</label>
+                  <.input
+                    type="text"
+                    name="name"
+                    value={@register_name}
+                    placeholder="My Company"
+                    autocomplete="organization"
+                    required
+                    class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                  />
+                </div>
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Email</label>
+                  <.input
+                    type="email"
+                    name="email"
+                    value={@register_email}
+                    placeholder="you@example.com"
+                    autocomplete="email"
+                    required
+                    class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                  />
+                </div>
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Password</label>
+                  <.input
+                    type="password"
+                    name="password"
+                    placeholder="Min. 8 characters"
+                    autocomplete="new-password"
+                    required
+                    minlength="8"
+                    class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                  />
+                </div>
+                <.button
+                  type="submit"
+                  class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold h-10"
+                >
+                  <Icons.user_plus class="w-4 h-4 mr-2" />
+                  Create Account
+                </.button>
+                <p class="text-xs text-zinc-600 text-center">
+                  Free plan · 5 agents · No credit card required
+                </p>
+              </form>
+            <% end %>
+
+            <%!-- API Key tab --%>
+            <%= if @auth_tab == "apikey" do %>
+              <form phx-submit="authenticate" class="space-y-4 animate-fade-in">
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Admin API Key</label>
+                  <.input
+                    type="password"
+                    name="key"
+                    value={@key_input}
+                    placeholder="rf_admin_..."
+                    autocomplete="off"
+                    class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                  />
+                </div>
+                <.button
+                  type="submit"
+                  class="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-semibold h-10 border border-zinc-700"
+                >
+                  <Icons.key class="w-4 h-4 mr-2" />
+                  Authenticate
+                </.button>
+                <p class="text-xs text-zinc-600 text-center">
+                  Use your admin key for direct access
+                </p>
+              </form>
+            <% end %>
+          </.card_content>
+        </.card>
+
+        <p class="text-xs text-zinc-600 text-center mt-6">
+          RingForge v0.1 · Multi-tenant agent mesh
+        </p>
+      </div>
     </div>
     """
   end

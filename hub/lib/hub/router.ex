@@ -48,6 +48,13 @@ defmodule Hub.Router do
     get "/metrics", MetricsController, :index
   end
 
+  scope "/auth", Hub do
+    pipe_through :browser
+    post "/register", SessionController, :register
+    post "/login", SessionController, :login
+    get "/logout", SessionController, :logout
+  end
+
   scope "/", Hub.Live do
     pipe_through :browser
     live "/dashboard", DashboardLive

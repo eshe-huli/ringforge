@@ -387,4 +387,35 @@ defmodule Hub.Live.Icons do
     </svg>
     """
   end
+
+  def alert_triangle(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
+      <path d="M12 9v4"></path>
+      <path d="M12 17h.01"></path>
+    </svg>
+    """
+  end
+
+  def user_plus(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+      <circle cx="9" cy="7" r="4"></circle>
+      <line x1="19" x2="19" y1="8" y2="14"></line>
+      <line x1="22" x2="16" y1="11" y2="11"></line>
+    </svg>
+    """
+  end
+
+  def key(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="7.5" cy="15.5" r="5.5"></circle>
+      <path d="m21 2-9.3 9.3"></path>
+      <path d="M18.5 5.5 20 7l-2 2"></path>
+    </svg>
+    """
+  end
 end
