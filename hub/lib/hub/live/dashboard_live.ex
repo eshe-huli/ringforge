@@ -205,7 +205,7 @@ defmodule Hub.Live.DashboardLive do
   def handle_event("send_dm_from_detail", _, socket) do
     agent_id = socket.assigns.selected_agent
     messages = load_conversation(socket.assigns.fleet_id, agent_id)
-    {:noreply, assign(socket, current_view: "messaging", msg_to: agent_id, messages: messages, agent_detail_open: false)}
+    {:noreply, assign(socket, current_view: "messaging", msg_to: agent_id, messages: messages, agent_detail_open: false, selected_agent: nil)}
   end
 
   # Filter / Search / Sort
@@ -660,87 +660,87 @@ defmodule Hub.Live.DashboardLive do
         </div>
       </div>
 
-      <%!-- Detail panel --%>
-      <%= if @agent_detail_open do %>
-        <% dm = Map.get(@agents, @selected_agent, %{}) %>
-        <div class="w-80 border-l border-zinc-800 overflow-y-auto shrink-0 bg-zinc-900 animate-slide-in-left">
-          <div class="p-4">
-            <div class="flex items-center justify-between mb-4">
-              <span class="text-sm font-medium text-zinc-300">Agent Detail</span>
-              <.button variant="ghost" size="icon" phx-click="close_agent_detail" class="h-7 w-7 text-zinc-500 hover:text-zinc-300">
-                <Icons.x class="w-4 h-4" />
+      <%!-- Agent Detail Sheet --%>
+      <.sheet class="contents">
+        <.sheet_content id="agent-detail-sheet" side="right" class="bg-zinc-900 border-zinc-800 p-0">
+          <%= if @selected_agent do %>
+            <% dm = Map.get(@agents, @selected_agent, %{}) %>
+            <div class="p-5 space-y-5">
+              <.sheet_header>
+                <.sheet_title class="text-sm font-medium text-zinc-200">Agent Detail</.sheet_title>
+                <.sheet_description class="text-xs text-zinc-500">Inspect agent state and activity</.sheet_description>
+              </.sheet_header>
+
+              <.card class="bg-zinc-800/50 border-zinc-700/50">
+                <.card_content class="p-4">
+                  <div class="flex items-center gap-3 mb-3">
+                    <div class={"w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold " <> Components.avatar_bg(dm[:state])}>
+                      <%= Components.avatar_initial(dm[:name] || @selected_agent) %>
+                    </div>
+                    <div>
+                      <div class="text-sm font-semibold text-zinc-100"><%= dm[:name] || @selected_agent %></div>
+                      <div class="flex items-center gap-1.5">
+                        <span class={"w-2 h-2 rounded-full " <> Components.state_dot(dm[:state])}></span>
+                        <.badge variant="outline" class={"text-[10px] " <> Components.state_badge(dm[:state])}><%= dm[:state] || "unknown" %></.badge>
+                      </div>
+                    </div>
+                  </div>
+
+                  <.separator class="my-3" />
+
+                  <div class="space-y-2 text-xs">
+                    <%= for {label, val} <- [{"ID", @selected_agent}, {"Framework", dm[:framework] || "—"}, {"Connected", Components.format_connected_at(dm[:connected_at])}] do %>
+                      <div class="flex justify-between py-1 border-b border-zinc-700/30">
+                        <span class="text-zinc-500"><%= label %></span>
+                        <span class="text-zinc-300 font-mono text-[11px] truncate ml-3 max-w-[160px]"><%= val %></span>
+                      </div>
+                    <% end %>
+                    <div class="py-1">
+                      <span class="text-zinc-500 block mb-1">Task</span>
+                      <span class="text-zinc-300 text-[11px]"><%= dm[:task] || "No active task" %></span>
+                    </div>
+                  </div>
+                </.card_content>
+              </.card>
+
+              <%!-- Capabilities --%>
+              <div>
+                <div class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">Capabilities</div>
+                <%= if dm[:capabilities] && dm[:capabilities] != [] do %>
+                  <div class="flex flex-wrap gap-1.5">
+                    <%= for cap <- List.wrap(dm[:capabilities]) do %>
+                      <.badge variant="outline" class="text-[10px] px-2 py-0.5 bg-amber-500/10 text-amber-400 border-amber-500/15"><%= cap %></.badge>
+                    <% end %>
+                  </div>
+                <% else %>
+                  <p class="text-xs text-zinc-600 italic">None registered</p>
+                <% end %>
+              </div>
+
+              <.button phx-click="send_dm_from_detail"
+                class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs">
+                <Icons.send class="w-3.5 h-3.5 mr-1.5" /> Send Message
               </.button>
-            </div>
 
-            <.card class="bg-zinc-800/50 border-zinc-700/50 mb-4">
-              <.card_content class="p-4">
-                <div class="flex items-center gap-3 mb-3">
-                  <div class={"w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold " <> Components.avatar_bg(dm[:state])}>
-                    <%= Components.avatar_initial(dm[:name] || @selected_agent) %>
+              <.separator />
+
+              <%!-- Recent activity --%>
+              <div>
+                <div class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">Recent Activity</div>
+                <%= if @agent_activities == [] do %>
+                  <p class="text-xs text-zinc-600 italic">No activity</p>
+                <% else %>
+                  <div class="space-y-0.5">
+                    <%= for a <- Enum.take(@agent_activities, 8) do %>
+                      <Components.activity_item activity={a} compact={true} />
+                    <% end %>
                   </div>
-                  <div>
-                    <div class="text-sm font-semibold text-zinc-100"><%= dm[:name] || @selected_agent %></div>
-                    <div class="flex items-center gap-1.5">
-                      <span class={"w-2 h-2 rounded-full " <> Components.state_dot(dm[:state])}></span>
-                      <.badge variant="outline" class={"text-[10px] " <> Components.state_badge(dm[:state])}><%= dm[:state] || "unknown" %></.badge>
-                    </div>
-                  </div>
-                </div>
-
-                <.separator class="my-3" />
-
-                <div class="space-y-2 text-xs">
-                  <%= for {label, val} <- [{"ID", @selected_agent}, {"Framework", dm[:framework] || "—"}, {"Connected", Components.format_connected_at(dm[:connected_at])}] do %>
-                    <div class="flex justify-between py-1 border-b border-zinc-700/30">
-                      <span class="text-zinc-500"><%= label %></span>
-                      <span class="text-zinc-300 font-mono text-[11px] truncate ml-3 max-w-[160px]"><%= val %></span>
-                    </div>
-                  <% end %>
-                  <div class="py-1">
-                    <span class="text-zinc-500 block mb-1">Task</span>
-                    <span class="text-zinc-300 text-[11px]"><%= dm[:task] || "No active task" %></span>
-                  </div>
-                </div>
-              </.card_content>
-            </.card>
-
-            <%!-- Capabilities --%>
-            <div class="mb-4">
-              <div class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">Capabilities</div>
-              <%= if dm[:capabilities] && dm[:capabilities] != [] do %>
-                <div class="flex flex-wrap gap-1.5">
-                  <%= for cap <- List.wrap(dm[:capabilities]) do %>
-                    <.badge variant="outline" class="text-[10px] px-2 py-0.5 bg-amber-500/10 text-amber-400 border-amber-500/15"><%= cap %></.badge>
-                  <% end %>
-                </div>
-              <% else %>
-                <p class="text-xs text-zinc-600 italic">None registered</p>
-              <% end %>
+                <% end %>
+              </div>
             </div>
-
-            <.button phx-click="send_dm_from_detail"
-              class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs mb-4">
-              Send Message
-            </.button>
-
-            <.separator class="mb-4" />
-
-            <%!-- Recent activity --%>
-            <div>
-              <div class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">Recent Activity</div>
-              <%= if @agent_activities == [] do %>
-                <p class="text-xs text-zinc-600 italic">No activity</p>
-              <% else %>
-                <div class="space-y-0.5">
-                  <%= for a <- Enum.take(@agent_activities, 8) do %>
-                    <Components.activity_item activity={a} compact={true} />
-                  <% end %>
-                </div>
-              <% end %>
-            </div>
-          </div>
-        </div>
-      <% end %>
+          <% end %>
+        </.sheet_content>
+      </.sheet>
     </div>
     """
   end
@@ -877,7 +877,7 @@ defmodule Hub.Live.DashboardLive do
                 class="flex-1 bg-zinc-900 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600" />
               <.button type="submit"
                 class="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs shrink-0">
-                Send
+                <Icons.send class="w-3.5 h-3.5 mr-1" /> Send
               </.button>
             </form>
           </div>

@@ -10,6 +10,7 @@ defmodule Hub.Live.Components do
   use SaladUI
 
   alias Hub.Live.Icons
+  alias Phoenix.LiveView.JS
 
   # ═══════════════════════════════════════════════════════════
   # Stat Card (SaladUI Card)
@@ -112,8 +113,7 @@ defmodule Hub.Live.Components do
   def agent_table_row(assigns) do
     ~H"""
     <.table_row
-      phx-click="select_agent_detail"
-      phx-value-agent-id={@agent_id}
+      phx-click={JS.push("select_agent_detail", value: %{"agent-id" => @agent_id}) |> JS.exec("phx-show-sheet", to: "#agent-detail-sheet")}
       class={"cursor-pointer transition-colors duration-150 " <> if(@selected, do: "bg-amber-500/5", else: "hover:bg-zinc-800/50")}
     >
       <.table_cell>
