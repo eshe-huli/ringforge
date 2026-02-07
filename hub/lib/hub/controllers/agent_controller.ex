@@ -55,6 +55,54 @@ defmodule Hub.AgentController do
     end
   end
 
+  @doc "PATCH /api/v1/agents/:agent_id — Update agent metadata (name, framework, capabilities)."
+  def update(conn, %{"id" => agent_id} = params) do
+    tenant_id = conn.assigns.tenant_id
+
+    agent =
+      Repo.get_by(Agent, agent_id: agent_id) || Repo.get(Agent, agent_id)
+
+    case agent do
+      %Agent{tenant_id: ^tenant_id} = a ->
+        updates =
+          %{}
+          |> put_if_present(params, "name", :name)
+          |> put_if_present(params, "framework", :framework)
+          |> put_if_present(params, "capabilities", :capabilities)
+
+        case a |> Agent.changeset(updates) |> Repo.update() do
+          {:ok, updated} ->
+            updated = Repo.preload(updated, [:fleet])
+            json(conn, agent_json(updated))
+
+          {:error, changeset} ->
+            conn |> put_status(422) |> json(%{error: "validation_failed", details: inspect(changeset.errors)})
+        end
+
+      %Agent{} ->
+        conn |> put_status(403) |> json(%{error: "forbidden"})
+
+      nil ->
+        conn |> put_status(404) |> json(%{error: "not_found"})
+    end
+  end
+
+  @doc "POST /api/v1/agents/cleanup — Remove unnamed, never-seen agents (ghost registrations)."
+  def cleanup(conn, _params) do
+    tenant_id = conn.assigns.tenant_id
+
+    {deleted, _} =
+      from(a in Agent,
+        where: a.tenant_id == ^tenant_id,
+        where: is_nil(a.name),
+        where: is_nil(a.last_seen_at),
+        where: is_nil(a.framework)
+      )
+      |> Repo.delete_all()
+
+    json(conn, %{deleted: deleted, message: "Removed #{deleted} ghost agent(s)"})
+  end
+
   @doc "DELETE /api/v1/agents/:agent_id — Remove agent record."
   def delete(conn, %{"id" => agent_id}) do
     tenant_id = conn.assigns.tenant_id
@@ -98,6 +146,13 @@ defmodule Hub.AgentController do
       online: presence != nil,
       presence: presence
     }
+  end
+
+  defp put_if_present(map, params, json_key, atom_key) do
+    case Map.get(params, json_key) do
+      nil -> map
+      val -> Map.put(map, atom_key, val)
+    end
   end
 
   defp get_presence(agent) do

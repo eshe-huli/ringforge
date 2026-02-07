@@ -71,6 +71,9 @@ defmodule Hub.FleetChannel do
     agent = fetch_agent(socket)
     join_payload = Map.get(payload, "payload", %{})
 
+    # Sync name/framework/capabilities from join payload back to DB
+    maybe_sync_agent_metadata(agent, join_payload)
+
     # Build presence metadata from join payload + agent DB record
     meta = build_meta(agent, join_payload)
 
@@ -692,6 +695,29 @@ defmodule Hub.FleetChannel do
   end
 
   # ── Private Helpers ─────────────────────────────────────────
+
+  defp maybe_sync_agent_metadata(nil, _payload), do: :ok
+
+  defp maybe_sync_agent_metadata(%Auth.Agent{} = agent, join_payload) do
+    updates =
+      %{}
+      |> maybe_update(:name, Map.get(join_payload, "name"), agent.name)
+      |> maybe_update(:framework, Map.get(join_payload, "framework"), agent.framework)
+      |> maybe_update(:capabilities, Map.get(join_payload, "capabilities"), agent.capabilities)
+
+    if map_size(updates) > 0 do
+      agent
+      |> Auth.Agent.changeset(updates)
+      |> Hub.Repo.update()
+    else
+      :ok
+    end
+  end
+
+  defp maybe_update(map, _key, nil, _current), do: map
+  defp maybe_update(map, _key, "", _current), do: map
+  defp maybe_update(map, key, new_val, current) when new_val != current, do: Map.put(map, key, new_val)
+  defp maybe_update(map, _key, _new_val, _current), do: map
 
   defp fetch_agent(socket) do
     case Auth.find_agent(socket.assigns.agent_id) do

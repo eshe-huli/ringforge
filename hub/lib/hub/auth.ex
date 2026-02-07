@@ -74,28 +74,53 @@ defmodule Hub.Auth do
   # --- Agent Registration ---
 
   @doc """
-  Registers a new agent using a validated API key.
+  Registers or reconnects an agent using a validated API key.
 
-  The agent is bound to the key's tenant and fleet. A unique `agent_id`
-  in the format "ag_{random}" is generated automatically.
+  If the agent provides a name + fleet combo that already exists, we reconnect
+  and update metadata instead of creating a duplicate. Otherwise a new agent is
+  created with a unique `agent_id` in the format "ag_{random}".
   """
   def register_agent(%ApiKey{} = api_key, agent_params) do
-    agent_id = "ag_#{base62_random(12)}"
-
-    # Determine fleet: use key's fleet, or fall back to default fleet for tenant
     fleet_id = api_key.fleet_id || default_fleet_id(api_key.tenant_id)
+    name = Map.get(agent_params, :name)
 
-    attrs =
-      Map.merge(agent_params, %{
-        agent_id: agent_id,
-        tenant_id: api_key.tenant_id,
-        fleet_id: fleet_id,
-        registered_via_key_id: api_key.id
-      })
+    # Try to find existing agent by name + fleet (stable identity across reconnects)
+    existing =
+      if name && name != "" do
+        Repo.one(
+          from a in Agent,
+            where: a.name == ^name and a.fleet_id == ^fleet_id,
+            limit: 1
+        )
+      end
 
-    case %Agent{} |> Agent.changeset(attrs) |> Repo.insert() do
-      {:ok, agent} -> {:ok, agent}
-      {:error, changeset} -> {:error, changeset}
+    case existing do
+      %Agent{} = agent ->
+        # Reconnect: update metadata and touch last_seen
+        update_attrs =
+          agent_params
+          |> Map.put(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
+
+        agent
+        |> Agent.changeset(update_attrs)
+        |> Repo.update()
+
+      nil ->
+        # New agent: generate ID and insert
+        agent_id = "ag_#{base62_random(12)}"
+
+        attrs =
+          Map.merge(agent_params, %{
+            agent_id: agent_id,
+            tenant_id: api_key.tenant_id,
+            fleet_id: fleet_id,
+            registered_via_key_id: api_key.id
+          })
+
+        case %Agent{} |> Agent.changeset(attrs) |> Repo.insert() do
+          {:ok, agent} -> {:ok, agent}
+          {:error, changeset} -> {:error, changeset}
+        end
     end
   end
 

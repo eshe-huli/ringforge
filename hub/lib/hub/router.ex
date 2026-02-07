@@ -39,7 +39,8 @@ defmodule Hub.Router do
 
     resources "/fleets", FleetController, only: [:index, :create, :show, :delete]
     resources "/keys", KeyController, only: [:index, :create, :delete]
-    resources "/agents", AgentController, only: [:index, :show, :delete]
+    resources "/agents", AgentController, only: [:index, :show, :update, :delete]
+    post "/agents/cleanup", AgentController, :cleanup
   end
 
   scope "/", Hub do
