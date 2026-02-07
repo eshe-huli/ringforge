@@ -228,7 +228,7 @@ defmodule Hub.Layouts do
       </head>
       <body class="h-full font-mono antialiased">
         <%= @inner_content %>
-        <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/phoenix@1.7.21/priv/static/phoenix.min.js"></script>
+        <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/phoenix@1.8.3/priv/static/phoenix.min.js"></script>
         <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/phoenix_live_view@1.1.22/priv/static/phoenix_live_view.min.js"></script>
         <script data-cfasync="false">
           // LiveView Hooks
