@@ -47,6 +47,7 @@ let refCounter = 0;
 let ws;
 let heartbeatInterval;
 let joinRef;
+let currentFleetTopic = null;
 
 function makeRef() {
   return String(++refCounter);
@@ -114,6 +115,7 @@ function connect() {
       if (payload.status === "ok") {
         if (topic.startsWith("fleet:")) {
           console.log("🎯 Joined fleet channel:", topic);
+          currentFleetTopic = topic;
           onJoined(topic, payload.response);
         }
       } else if (payload.status === "error") {
@@ -148,7 +150,18 @@ function connect() {
       console.log(`⚡ Activity: [${p.kind}] ${p.from?.name || "unknown"} — ${p.description}`);
     } else if (event === "direct:message") {
       const p = payload?.payload || payload;
-      console.log(`💬 DM from ${p.from?.name || p.from?.agent_id}: ${p.message?.text || JSON.stringify(p.message)}`);
+      const fromName = p.from?.name || p.from?.agent_id || "unknown";
+      const text = p.message?.text || JSON.stringify(p.message);
+      console.log(`💬 DM from ${fromName}: ${text}`);
+
+      // Auto-respond to ping
+      if (text.toLowerCase().startsWith("ping") && p.from?.agent_id && currentFleetTopic) {
+        const pongMsg = `pong — ${config.name} here, alive and well 🟢`;
+        pushChannel(currentFleetTopic, "direct:send", {
+          payload: { to: p.from.agent_id, message: { text: pongMsg } }
+        });
+        console.log(`→ Auto-pong sent to ${fromName}`);
+      }
     } else if (event === "system:quota_warning") {
       console.log("⚠️  Quota warning:", JSON.stringify(payload));
     } else if (topic === "phoenix" && event === "phx_reply") {
