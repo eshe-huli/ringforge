@@ -53,6 +53,9 @@ defmodule Hub.Live.DashboardLive do
           toast: nil,
           cmd_open: false,
           cmd_query: "",
+          new_api_key: nil,
+          new_api_key_type: nil,
+          editing_fleet_name: false,
           authenticated: true
         )
 
@@ -95,6 +98,7 @@ defmodule Hub.Live.DashboardLive do
           msg_to: nil, msg_body: "", messages: [],
           filter: "all", search_query: "", sort_by: :name, sort_dir: :asc,
           toast: nil, cmd_open: false, cmd_query: "",
+          new_api_key: nil, new_api_key_type: nil, editing_fleet_name: false,
           authenticated: true, auth_error: nil
         )
 
@@ -218,6 +222,91 @@ defmodule Hub.Live.DashboardLive do
   end
 
   def handle_event("clear_toast", _, socket), do: {:noreply, assign(socket, toast: nil)}
+
+  # ── Settings: Fleet name editing ──────────────────────────────
+
+  def handle_event("edit_fleet_name", _, socket) do
+    {:noreply, assign(socket, editing_fleet_name: true)}
+  end
+
+  def handle_event("cancel_edit_fleet_name", _, socket) do
+    {:noreply, assign(socket, editing_fleet_name: false)}
+  end
+
+  def handle_event("rename_fleet", %{"name" => name}, socket) do
+    name = String.trim(name)
+    if name == "" do
+      Process.send_after(self(), :clear_toast, 4_000)
+      {:noreply, assign(socket, toast: {:error, "Fleet name cannot be empty"})}
+    else
+      import Ecto.Query
+      case Hub.Repo.get(Hub.Auth.Fleet, socket.assigns.fleet_id) do
+        nil ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, "Fleet not found"})}
+        fleet ->
+          case fleet |> Hub.Auth.Fleet.changeset(%{name: name}) |> Hub.Repo.update() do
+            {:ok, updated} ->
+              Process.send_after(self(), :clear_toast, 4_000)
+              {:noreply, assign(socket, fleet_name: updated.name, editing_fleet_name: false, toast: {:success, "Fleet renamed to \"#{updated.name}\""})}
+            {:error, _} ->
+              Process.send_after(self(), :clear_toast, 4_000)
+              {:noreply, assign(socket, toast: {:error, "Failed to rename fleet"})}
+          end
+      end
+    end
+  end
+
+  # ── Settings: API key rotation ─────────────────────────────
+
+  def handle_event("rotate_api_key", %{"type" => type}, socket) when type in ["live", "test", "admin"] do
+    tenant_id = socket.assigns.tenant_id
+    fleet_id = socket.assigns.fleet_id
+
+    # Revoke all existing keys of this type for the tenant
+    import Ecto.Query
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    from(k in Hub.Auth.ApiKey,
+      where: k.tenant_id == ^tenant_id and k.type == ^type and is_nil(k.revoked_at)
+    ) |> Hub.Repo.update_all(set: [revoked_at: now])
+
+    # Generate new key
+    case Hub.Auth.generate_api_key(type, tenant_id, fleet_id) do
+      {:ok, raw_key, _api_key} ->
+        Process.send_after(self(), :clear_toast, 8_000)
+        {:noreply, assign(socket,
+          toast: {:success, "New #{type} key: #{raw_key}"},
+          new_api_key: raw_key,
+          new_api_key_type: type
+        )}
+      {:error, _} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Failed to generate key"})}
+    end
+  end
+
+  def handle_event("rotate_api_key", _, socket) do
+    Process.send_after(self(), :clear_toast, 4_000)
+    {:noreply, assign(socket, toast: {:error, "Invalid key type"})}
+  end
+
+  def handle_event("dismiss_new_key", _, socket) do
+    {:noreply, assign(socket, new_api_key: nil, new_api_key_type: nil)}
+  end
+
+  # ── Agent: Kick / Disconnect ───────────────────────────────
+
+  def handle_event("kick_agent", %{"agent-id" => agent_id}, socket) do
+    # Force-disconnect via Endpoint broadcast to the agent's socket
+    Hub.Endpoint.broadcast("agent:#{agent_id}", "disconnect", %{reason: "kicked_by_admin"})
+
+    Process.send_after(self(), :clear_toast, 4_000)
+    {:noreply, assign(socket,
+      toast: {:success, "Kicked agent: #{agent_id}"},
+      agent_detail_open: false,
+      selected_agent: nil
+    )}
+  end
 
   # ══════════════════════════════════════════════════════════
   # PubSub Handlers
@@ -717,10 +806,21 @@ defmodule Hub.Live.DashboardLive do
                 <% end %>
               </div>
 
-              <.button phx-click="send_dm_from_detail"
-                class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs">
-                <Icons.send class="w-3.5 h-3.5 mr-1.5" /> Send Message
-              </.button>
+              <div class="flex gap-2">
+                <.button phx-click="send_dm_from_detail"
+                  class="flex-1 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs">
+                  <Icons.send class="w-3.5 h-3.5 mr-1.5" /> Message
+                </.button>
+                <.button
+                  variant="outline"
+                  phx-click="kick_agent"
+                  phx-value-agent-id={@selected_agent}
+                  data-confirm={"Disconnect #{dm[:name] || @selected_agent} from the fleet?"}
+                  class="text-xs border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                >
+                  <Icons.x class="w-3.5 h-3.5 mr-1" /> Kick
+                </.button>
+              </div>
 
               <.separator />
 
@@ -974,20 +1074,25 @@ defmodule Hub.Live.DashboardLive do
           </.card_content>
         </.card>
 
-        <%!-- Charts placeholder --%>
+        <%!-- Usage Summary --%>
         <.card class="bg-zinc-900 border-zinc-800">
           <.card_header class="pb-2">
-            <div class="flex items-center justify-between">
-              <.card_title class="text-sm font-medium text-zinc-300">Usage Over Time</.card_title>
-              <.badge variant="outline" class="text-[10px] bg-zinc-800 border-zinc-700 text-zinc-500">Coming soon</.badge>
-            </div>
+            <.card_title class="text-sm font-medium text-zinc-300">Usage Summary</.card_title>
           </.card_header>
           <.card_content>
-            <div class="h-28 flex items-center justify-center border border-zinc-800 border-dashed rounded-lg">
-              <div class="text-center">
-                <span class="text-xl opacity-20">📊</span>
-                <p class="text-[10px] text-zinc-600 mt-1">Historical charts</p>
-              </div>
+            <div class="grid grid-cols-2 gap-4">
+              <%= for {resource, label, _icon, color} <- Components.quota_resources() do %>
+                <% info = Map.get(@usage, resource, %{used: 0, limit: 0}) %>
+                <% pct = Components.quota_pct(info) %>
+                <div class="text-center p-3 rounded-lg bg-zinc-800/30">
+                  <div class={"text-2xl font-bold " <> if(pct >= 80, do: "text-amber-400", else: "text-zinc-200")}><%= Components.fmt_num(info[:used] || 0) %></div>
+                  <div class="text-[10px] text-zinc-500 mt-0.5"><%= label %></div>
+                  <div class="mt-2 h-1 bg-zinc-800 rounded-full overflow-hidden">
+                    <div class={"h-full rounded-full " <> Components.bar_color(pct)} style={"width: #{max(pct, 1)}%"}></div>
+                  </div>
+                  <div class="text-[10px] text-zinc-600 mt-1"><%= pct %>% of <%= Components.fmt_limit(info[:limit] || 0) %></div>
+                </div>
+              <% end %>
             </div>
           </.card_content>
         </.card>
@@ -1006,17 +1111,38 @@ defmodule Hub.Live.DashboardLive do
       <div class="max-w-2xl">
         <div class="mb-6">
           <h2 class="text-lg font-semibold text-zinc-100">Settings</h2>
-          <p class="text-sm text-zinc-500">Fleet configuration</p>
+          <p class="text-sm text-zinc-500">Fleet configuration and API key management</p>
         </div>
 
-        <%!-- Fleet Info --%>
+        <%!-- Fleet Info (editable) --%>
         <.card class="bg-zinc-900 border-zinc-800 mb-4">
           <.card_header class="pb-2">
-            <.card_title class="text-sm font-medium text-zinc-300">Fleet Information</.card_title>
+            <div class="flex items-center justify-between">
+              <.card_title class="text-sm font-medium text-zinc-300">Fleet Information</.card_title>
+            </div>
           </.card_header>
           <.card_content>
             <div class="space-y-0 text-xs divide-y divide-zinc-800/50">
-              <%= for {label, val} <- [{"Fleet Name", @fleet_name}, {"Fleet ID", @fleet_id}, {"Tenant ID", @tenant_id}] do %>
+              <%!-- Fleet Name — editable --%>
+              <div class="flex items-center justify-between py-2.5">
+                <span class="text-zinc-500">Fleet Name</span>
+                <%= if @editing_fleet_name do %>
+                  <form phx-submit="rename_fleet" class="flex items-center gap-2">
+                    <input type="text" name="name" value={@fleet_name} autofocus
+                      class="h-7 px-2 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200 focus:border-amber-500/50 focus:outline-none w-40" />
+                    <.button type="submit" variant="ghost" size="sm" class="h-7 px-2 text-[10px] text-amber-400 hover:text-amber-300">Save</.button>
+                    <.button type="button" variant="ghost" size="sm" phx-click="cancel_edit_fleet_name" class="h-7 px-2 text-[10px] text-zinc-500 hover:text-zinc-300">Cancel</.button>
+                  </form>
+                <% else %>
+                  <div class="flex items-center gap-2">
+                    <span class="text-zinc-300 font-mono text-[11px]"><%= @fleet_name %></span>
+                    <button phx-click="edit_fleet_name" class="text-zinc-600 hover:text-amber-400 transition-colors" title="Edit name">
+                      <Icons.settings class="w-3 h-3" />
+                    </button>
+                  </div>
+                <% end %>
+              </div>
+              <%= for {label, val} <- [{"Fleet ID", @fleet_id}, {"Tenant ID", @tenant_id}] do %>
                 <div class="flex justify-between py-2.5">
                   <span class="text-zinc-500"><%= label %></span>
                   <span class="text-zinc-300 font-mono text-[11px]"><%= val %></span>
@@ -1030,6 +1156,53 @@ defmodule Hub.Live.DashboardLive do
                 <span class="text-zinc-500">Agents</span>
                 <span class="text-zinc-300"><%= map_size(@agents) %> connected</span>
               </div>
+            </div>
+          </.card_content>
+        </.card>
+
+        <%!-- API Keys --%>
+        <.card class="bg-zinc-900 border-zinc-800 mb-4">
+          <.card_header class="pb-2">
+            <.card_title class="text-sm font-medium text-zinc-300">API Keys</.card_title>
+            <.card_description>Rotate keys to revoke all existing keys of that type and generate a new one</.card_description>
+          </.card_header>
+          <.card_content>
+            <%!-- New key alert --%>
+            <%= if @new_api_key do %>
+              <div class="mb-4 p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 animate-fade-in">
+                <div class="flex items-center justify-between mb-1.5">
+                  <span class="text-xs font-semibold text-amber-400">New <%= @new_api_key_type %> key generated</span>
+                  <button phx-click="dismiss_new_key" class="text-zinc-500 hover:text-zinc-300">
+                    <Icons.x class="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <code class="text-[11px] text-zinc-200 font-mono block break-all select-all bg-zinc-900/50 rounded p-2"><%= @new_api_key %></code>
+                <p class="text-[10px] text-amber-400/70 mt-1.5">⚠ Save this key now — it will not be shown again</p>
+              </div>
+            <% end %>
+
+            <div class="space-y-2">
+              <%= for {type, desc, color} <- [{"live", "Agent connections", "green"}, {"test", "Testing & development", "blue"}, {"admin", "Dashboard & admin API", "amber"}] do %>
+                <div class="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-zinc-800/50 transition-colors">
+                  <div class="flex items-center gap-3">
+                    <div class={"w-2 h-2 rounded-full bg-#{color}-400"}></div>
+                    <div>
+                      <div class="text-xs font-medium text-zinc-200 capitalize"><%= type %></div>
+                      <div class="text-[10px] text-zinc-600"><%= desc %></div>
+                    </div>
+                  </div>
+                  <.button
+                    variant="outline"
+                    size="sm"
+                    phx-click="rotate_api_key"
+                    phx-value-type={type}
+                    data-confirm={"Rotate #{type} key? All existing #{type} keys will be revoked."}
+                    class="h-7 text-[10px] border-zinc-700 text-zinc-400 hover:text-amber-400 hover:border-amber-500/30"
+                  >
+                    Rotate
+                  </.button>
+                </div>
+              <% end %>
             </div>
           </.card_content>
         </.card>
