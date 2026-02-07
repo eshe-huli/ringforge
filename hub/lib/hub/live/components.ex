@@ -9,6 +9,8 @@ defmodule Hub.Live.Components do
   use Phoenix.Component
   use SaladUI
 
+  alias Hub.Live.Icons
+
   # ═══════════════════════════════════════════════════════════
   # Stat Card (SaladUI Card)
   # ═══════════════════════════════════════════════════════════
@@ -26,7 +28,7 @@ defmodule Hub.Live.Components do
       <.card_header class="pb-2">
         <.card_description class="flex items-center gap-2">
           <div class={"p-1.5 rounded-lg " <> icon_bg(@color)}>
-            <span class="text-sm"><%= @icon %></span>
+            <%= render_icon(@icon, "w-3.5 h-3.5") %>
           </div>
           <span class="text-xs text-zinc-400"><%= @label %></span>
         </.card_description>
@@ -196,7 +198,7 @@ defmodule Hub.Live.Components do
     <div>
       <div class="flex items-center justify-between text-xs mb-1">
         <span class="text-zinc-400 flex items-center gap-1.5">
-          <span><%= @icon %></span>
+          <%= render_icon(@icon, "w-3 h-3") %>
           <span><%= @label %></span>
         </span>
         <span class="text-zinc-500 font-mono text-[11px]">
@@ -229,7 +231,7 @@ defmodule Hub.Live.Components do
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-3">
             <div class={"p-2 rounded-lg " <> icon_bg(@color)}>
-              <span class="text-base"><%= @icon %></span>
+              <%= render_icon(@icon, "w-4 h-4") %>
             </div>
             <div>
               <div class="text-sm font-medium text-zinc-200"><%= @label %></div>
@@ -269,7 +271,9 @@ defmodule Hub.Live.Components do
       phx-value-view={@view}
       class={"w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors duration-150 " <> if(@active, do: "bg-zinc-800 text-zinc-100", else: "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50")}
     >
-      <span class={"w-5 text-center " <> if(@active, do: "text-amber-400", else: "")}><%= @icon %></span>
+      <span class={"w-5 flex justify-center " <> if(@active, do: "text-amber-400", else: "")}>
+        <%= render_icon(@icon, "w-4 h-4") %>
+      </span>
       <span class="flex-1 text-left font-medium"><%= @label %></span>
       <%= if @badge do %>
         <.badge variant="secondary" class="text-[10px] px-1.5 py-0.5 bg-zinc-700 text-zinc-400 font-mono"><%= @badge %></.badge>
@@ -347,8 +351,8 @@ defmodule Hub.Live.Components do
 
     ~H"""
     <div class="flex flex-col items-center justify-center py-12 text-center">
-      <div class="w-14 h-14 rounded-2xl bg-zinc-800 flex items-center justify-center mb-4">
-        <span class="text-2xl opacity-40"><%= @icon %></span>
+      <div class="w-14 h-14 rounded-2xl bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center mb-4 text-zinc-500">
+        <%= render_icon(@icon, "w-6 h-6") %>
       </div>
       <p class="font-medium text-zinc-400"><%= @message %></p>
       <%= if @subtitle do %>
@@ -413,9 +417,7 @@ defmodule Hub.Live.Components do
           <.card_content class="p-0">
             <%!-- Search --%>
             <div class="flex items-center gap-3 px-4 py-3 border-b border-zinc-800">
-              <svg class="w-5 h-5 text-zinc-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              </svg>
+              <Icons.search class="w-5 h-5 text-zinc-500 shrink-0" />
               <input
                 type="text"
                 value={@query}
@@ -431,14 +433,14 @@ defmodule Hub.Live.Components do
             <div class="max-h-[50vh] overflow-y-auto py-2">
               <%!-- Navigation --%>
               <div class="px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">Navigate</div>
-              <%= for {view, label, icon} <- [{"dashboard", "Dashboard", "◈"}, {"agents", "Agents", "◎"}, {"activity", "Activity", "◉"}, {"messaging", "Messaging", "◆"}, {"quotas", "Quotas", "◧"}, {"settings", "Settings", "⚙"}] do %>
+              <%= for {view, label, icon} <- [{"dashboard", "Dashboard", :layout_dashboard}, {"agents", "Agents", :bot}, {"activity", "Activity", :activity}, {"messaging", "Messaging", :message_square}, {"quotas", "Quotas", :gauge}, {"settings", "Settings", :settings}] do %>
                 <%= if @query == "" || String.contains?(String.downcase(label), String.downcase(@query)) do %>
                   <button
                     phx-click="cmd_navigate"
                     phx-value-view={view}
                     class="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-zinc-800 transition-colors"
                   >
-                    <span class="text-sm text-zinc-500"><%= icon %></span>
+                    <span class="text-zinc-500"><%= render_icon(icon, "w-4 h-4") %></span>
                     <span class="text-sm font-medium text-zinc-200"><%= label %></span>
                   </button>
                 <% end %>
@@ -620,10 +622,40 @@ defmodule Hub.Live.Components do
 
   def quota_resources do
     [
-      {:connected_agents, "Agents", "◎", "amber"},
-      {:messages_today, "Messages", "◆", "blue"},
-      {:memory_entries, "Memory", "◧", "purple"},
-      {:fleets, "Fleets", "◈", "green"}
+      {:connected_agents, "Agents", :bot, "amber"},
+      {:messages_today, "Messages", :message_square, "blue"},
+      {:memory_entries, "Memory", :brain, "purple"},
+      {:fleets, "Fleets", :network, "green"}
     ]
   end
+
+  # ═══════════════════════════════════════════════════════════
+  # Icon Renderer
+  # ═══════════════════════════════════════════════════════════
+
+  def render_icon(icon, class \\ "w-4 h-4")
+  def render_icon(:layout_dashboard, class), do: Icons.layout_dashboard(%{class: class})
+  def render_icon(:bot, class), do: Icons.bot(%{class: class})
+  def render_icon(:activity, class), do: Icons.activity(%{class: class})
+  def render_icon(:message_square, class), do: Icons.message_square(%{class: class})
+  def render_icon(:gauge, class), do: Icons.gauge(%{class: class})
+  def render_icon(:settings, class), do: Icons.settings(%{class: class})
+  def render_icon(:zap, class), do: Icons.zap(%{class: class})
+  def render_icon(:search, class), do: Icons.search(%{class: class})
+  def render_icon(:users, class), do: Icons.users(%{class: class})
+  def render_icon(:brain, class), do: Icons.brain(%{class: class})
+  def render_icon(:database, class), do: Icons.database(%{class: class})
+  def render_icon(:network, class), do: Icons.network(%{class: class})
+  def render_icon(:layers, class), do: Icons.layers(%{class: class})
+  def render_icon(:send, class), do: Icons.send(%{class: class})
+  def render_icon(:shield, class), do: Icons.shield(%{class: class})
+  def render_icon(:globe, class), do: Icons.globe(%{class: class})
+  def render_icon(:inbox, class), do: Icons.inbox(%{class: class})
+  def render_icon(:wifi, class), do: Icons.wifi(%{class: class})
+  def render_icon(:plug, class), do: Icons.plug(%{class: class})
+  def render_icon(:clock, class), do: Icons.clock(%{class: class})
+  def render_icon(:bar_chart, class), do: Icons.bar_chart(%{class: class})
+  def render_icon(:radio, class), do: Icons.radio(%{class: class})
+  def render_icon(:x, class), do: Icons.x(%{class: class})
+  def render_icon(_, _class), do: nil
 end

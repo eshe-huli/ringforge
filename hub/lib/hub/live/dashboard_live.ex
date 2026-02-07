@@ -18,6 +18,7 @@ defmodule Hub.Live.DashboardLive do
 
   alias Hub.FleetPresence
   alias Hub.Live.Components
+  alias Hub.Live.Icons
 
   @activity_limit 100
 
@@ -346,13 +347,11 @@ defmodule Hub.Live.DashboardLive do
 
   defp render_login(assigns) do
     ~H"""
-    <div class="min-h-screen flex items-center justify-center bg-zinc-950">
-      <.card class="w-full max-w-sm bg-zinc-900 border-zinc-800 shadow-2xl animate-fade-in-up">
+    <div class="min-h-screen flex items-center justify-center bg-zinc-950 bg-grid bg-radial-glow">
+      <.card class="w-full max-w-sm bg-zinc-900/95 backdrop-blur-sm border-zinc-800 shadow-2xl animate-fade-in-up">
         <.card_header class="text-center pb-2">
           <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-amber-500/15 border border-amber-500/25 mb-4 mx-auto">
-            <svg class="w-6 h-6 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-            </svg>
+            <Icons.zap class="w-6 h-6 text-amber-400" />
           </div>
           <.card_title class="text-xl">
             <span>Ring</span><span class="text-amber-400">Forge</span>
@@ -415,15 +414,11 @@ defmodule Hub.Live.DashboardLive do
       <header class="h-12 border-b border-zinc-800 flex items-center justify-between px-4 shrink-0 bg-zinc-950">
         <div class="flex items-center gap-3">
           <.button variant="ghost" size="icon" phx-click="toggle_sidebar" class="h-8 w-8 text-zinc-400 hover:text-zinc-200">
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line>
-            </svg>
+            <Icons.menu class="w-4 h-4" />
           </.button>
           <div class="flex items-center gap-2">
-            <div class="w-7 h-7 rounded-lg bg-amber-500/15 border border-amber-500/25 flex items-center justify-center">
-              <svg class="w-3.5 h-3.5 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-              </svg>
+            <div class="w-7 h-7 rounded-lg bg-amber-500/15 border border-amber-500/25 flex items-center justify-center text-amber-400">
+              <Icons.zap class="w-3.5 h-3.5" />
             </div>
             <span class="text-sm font-semibold text-zinc-200">Ring<span class="text-amber-400">Forge</span></span>
             <.separator orientation="vertical" class="h-4 mx-1" />
@@ -434,7 +429,7 @@ defmodule Hub.Live.DashboardLive do
         <div class="flex items-center gap-3">
           <%!-- Cmd+K button --%>
           <.button variant="outline" size="sm" phx-click="toggle_command_palette" class="hidden sm:flex items-center gap-2 border-zinc-800 hover:border-zinc-700 text-zinc-500 hover:text-zinc-300">
-            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <Icons.search class="w-3.5 h-3.5" />
             <span>Search</span>
             <kbd class="px-1 py-0.5 text-[10px] rounded bg-zinc-800 border border-zinc-700 text-zinc-500">⌘K</kbd>
           </.button>
@@ -463,12 +458,12 @@ defmodule Hub.Live.DashboardLive do
             <div class="px-3 py-2 mb-1">
               <span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Menu</span>
             </div>
-            <Components.nav_item view="dashboard" icon="◈" label="Dashboard" active={@current_view == "dashboard"} />
-            <Components.nav_item view="agents" icon="◎" label="Agents" active={@current_view == "agents"} badge={to_string(map_size(@agents))} />
-            <Components.nav_item view="activity" icon="◉" label="Activity" active={@current_view == "activity"} />
-            <Components.nav_item view="messaging" icon="◆" label="Messaging" active={@current_view == "messaging"} />
-            <Components.nav_item view="quotas" icon="◧" label="Quotas" active={@current_view == "quotas"} />
-            <Components.nav_item view="settings" icon="⚙" label="Settings" active={@current_view == "settings"} />
+            <Components.nav_item view="dashboard" icon={:layout_dashboard} label="Dashboard" active={@current_view == "dashboard"} />
+            <Components.nav_item view="agents" icon={:bot} label="Agents" active={@current_view == "agents"} badge={to_string(map_size(@agents))} />
+            <Components.nav_item view="activity" icon={:activity} label="Activity" active={@current_view == "activity"} />
+            <Components.nav_item view="messaging" icon={:message_square} label="Messaging" active={@current_view == "messaging"} />
+            <Components.nav_item view="quotas" icon={:gauge} label="Quotas" active={@current_view == "quotas"} />
+            <Components.nav_item view="settings" icon={:settings} label="Settings" active={@current_view == "settings"} />
 
             <.separator class="my-4" />
 
@@ -527,10 +522,10 @@ defmodule Hub.Live.DashboardLive do
 
       <%!-- Stat cards --%>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 lg-grid-4">
-        <Components.stat_card label="Total Agents" value={to_string(map_size(@agents))} icon="◎" color="amber" />
-        <Components.stat_card label="Online Now" value={to_string(@ov_online)} icon="◉" color="green" delta={"+" <> to_string(@ov_online)} delta_type={:positive} />
-        <Components.stat_card label="Messages Today" value={Components.fmt_num(@msg_info[:used] || 0)} icon="◆" color="blue" />
-        <Components.stat_card label="Memory Used" value={to_string(Components.quota_pct(@mem_info)) <> "%"} icon="◧" color="purple" />
+        <Components.stat_card label="Total Agents" value={to_string(map_size(@agents))} icon={:bot} color="amber" />
+        <Components.stat_card label="Online Now" value={to_string(@ov_online)} icon={:wifi} color="green" delta={"+" <> to_string(@ov_online)} delta_type={:positive} />
+        <Components.stat_card label="Messages Today" value={Components.fmt_num(@msg_info[:used] || 0)} icon={:message_square} color="blue" />
+        <Components.stat_card label="Memory Used" value={to_string(Components.quota_pct(@mem_info)) <> "%"} icon={:brain} color="purple" />
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 lg-grid-sidebar">
@@ -541,7 +536,7 @@ defmodule Hub.Live.DashboardLive do
             <.button variant="link" phx-click="navigate" phx-value-view="agents" class="text-xs text-amber-400 hover:text-amber-300 p-0 h-auto">View all →</.button>
           </div>
           <%= if map_size(@agents) == 0 do %>
-            <Components.empty_state message="No agents connected" subtitle="Agents appear here when they join the fleet" icon="◎" />
+            <Components.empty_state message="No agents connected" subtitle="Agents appear here when they join the fleet" icon={:bot} />
           <% else %>
             <div class="grid grid-cols-2 xl:grid-cols-3 gap-2">
               <%= for {agent_id, meta} <- @agents_sorted do %>
@@ -625,7 +620,7 @@ defmodule Hub.Live.DashboardLive do
                 type="text" placeholder="Search agents..." value={@search_query} phx-keyup="update_search"
                 class="w-56 pl-8 bg-zinc-900 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600"
               />
-              <svg class="w-3.5 h-3.5 absolute left-2.5 top-3 text-zinc-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <span class="absolute left-2.5 top-3 text-zinc-500"><Icons.search class="w-3.5 h-3.5" /></span>
             </div>
           </div>
         </div>
@@ -633,7 +628,7 @@ defmodule Hub.Live.DashboardLive do
         <%!-- Table --%>
         <div class="flex-1 overflow-auto">
           <%= if @agents_list == [] do %>
-            <Components.empty_state message="No agents found" subtitle="Try a different search or wait for agents" icon="◎" />
+            <Components.empty_state message="No agents found" subtitle="Try a different search or wait for agents" icon={:search} />
           <% else %>
             <.table>
               <.table_header class="sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-sm">
@@ -673,7 +668,7 @@ defmodule Hub.Live.DashboardLive do
             <div class="flex items-center justify-between mb-4">
               <span class="text-sm font-medium text-zinc-300">Agent Detail</span>
               <.button variant="ghost" size="icon" phx-click="close_agent_detail" class="h-7 w-7 text-zinc-500 hover:text-zinc-300">
-                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                <Icons.x class="w-4 h-4" />
               </.button>
             </div>
 
@@ -789,7 +784,7 @@ defmodule Hub.Live.DashboardLive do
 
       <div class="flex-1 overflow-y-auto px-6 py-4" id="activity-stream">
         <%= if @total == 0 do %>
-          <Components.empty_state message="No events match filter" subtitle="Try a different filter or wait for new events" icon="◉" />
+          <Components.empty_state message="No events match filter" subtitle="Try a different filter or wait for new events" icon={:activity} />
         <% else %>
           <%= for {label, items} <- [{"Today", @today}, {"Yesterday", @yesterday}, {"Older", @older}], items != [] do %>
             <div class="mb-5">
@@ -862,7 +857,7 @@ defmodule Hub.Live.DashboardLive do
             <%= if @messages == [] do %>
               <div class="flex flex-col items-center justify-center h-full text-center">
                 <div class="w-12 h-12 rounded-2xl bg-zinc-800 flex items-center justify-center mb-3">
-                  <span class="text-xl opacity-30">◆</span>
+                  <Icons.message_square class="w-5 h-5 text-zinc-600" />
                 </div>
                 <p class="text-sm text-zinc-500">No messages yet</p>
                 <p class="text-xs text-zinc-600 mt-0.5">Send the first message below</p>
@@ -890,7 +885,7 @@ defmodule Hub.Live.DashboardLive do
           <div class="flex-1 flex items-center justify-center">
             <div class="text-center">
               <div class="w-14 h-14 rounded-2xl bg-zinc-800 flex items-center justify-center mb-4 mx-auto">
-                <span class="text-2xl opacity-30">◆</span>
+                <Icons.message_square class="w-6 h-6 text-zinc-600" />
               </div>
               <p class="font-medium text-zinc-400">Select an agent</p>
               <p class="text-sm text-zinc-500 mt-1">Choose from the list to start messaging</p>
@@ -923,7 +918,7 @@ defmodule Hub.Live.DashboardLive do
           <.card_content class="p-4 flex items-center justify-between">
             <div class="flex items-center gap-3">
               <div class="p-2 rounded-lg bg-amber-500/15">
-                <svg class="w-5 h-5 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                <Icons.zap class="w-5 h-5 text-amber-400" />
               </div>
               <div>
                 <div class="text-sm font-semibold text-zinc-100 capitalize"><%= @plan %> Plan</div>
