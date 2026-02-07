@@ -20,7 +20,10 @@ defmodule Hub.Endpoint do
 
   # LiveView WebSocket transport
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]]
+    websocket: [
+      check_origin: false,
+      connect_info: [session: @session_options]
+    ]
 
   plug Plug.Session, @session_options
 
