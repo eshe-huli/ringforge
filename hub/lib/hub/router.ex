@@ -66,7 +66,11 @@ defmodule Hub.Router do
     patch "/tenants/:id", TenantController, :update
     get "/tenants/:id/usage", TenantController, :usage
 
-    resources "/fleets", FleetController, only: [:index, :create, :show, :delete]
+    resources "/fleets", FleetController, only: [:index, :create, :show, :update, :delete]
+    post "/fleets/:fleet_id/agents/:agent_id", FleetController, :assign_agent
+    post "/fleets/:fleet_id/squads", FleetController, :create_squad
+    post "/squads/:squad_id/agents/:agent_id", FleetController, :assign_agent_to_squad
+    delete "/squads/:squad_id/agents/:agent_id", FleetController, :remove_agent_from_squad
     resources "/keys", KeyController, only: [:index, :create, :delete]
     resources "/agents", AgentController, only: [:index, :show, :update, :delete]
     post "/agents/cleanup", AgentController, :cleanup

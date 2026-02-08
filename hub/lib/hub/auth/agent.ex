@@ -36,6 +36,7 @@ defmodule Hub.Auth.Agent do
 
     belongs_to :tenant, Hub.Auth.Tenant
     belongs_to :fleet, Hub.Auth.Fleet
+    belongs_to :squad, Hub.Groups.Group
     belongs_to :registered_via_key, Hub.Auth.ApiKey
 
     has_many :sessions, Hub.Auth.AgentSession
@@ -45,7 +46,7 @@ defmodule Hub.Auth.Agent do
 
   @cast_fields [
     :agent_id, :name, :display_name, :public_key, :framework, :capabilities,
-    :last_seen_at, :tenant_id, :fleet_id, :registered_via_key_id,
+    :last_seen_at, :tenant_id, :fleet_id, :squad_id, :registered_via_key_id,
     :avatar_url, :description, :tags, :metadata,
     :total_connections, :total_messages
   ]

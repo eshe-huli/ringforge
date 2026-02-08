@@ -935,6 +935,185 @@ defmodule Hub.FleetChannel do
     {:reply, {:error, %{reason: "payload must include \"task_id\""}}, socket}
   end
 
+  # ── Fleet Management (tenant-level) ────────────────────────
+
+  def handle_in("fleet:create", %{"payload" => payload}, socket) do
+    tenant_id = socket.assigns.tenant_id
+
+    name = Map.get(payload, "name")
+    description = Map.get(payload, "description")
+
+    if is_nil(name) or name == "" do
+      {:reply, {:error, %{
+        reason: "missing_name",
+        message: "Fleet requires a 'name' field.",
+        fix: "Add payload.name with the fleet name."
+      }}, socket}
+    else
+      attrs = %{name: name}
+      attrs = if description, do: Map.put(attrs, :description, description), else: attrs
+
+      case Hub.Fleets.create_fleet(tenant_id, attrs) do
+        {:ok, fleet} ->
+          {:reply, {:ok, %{
+            "type" => "fleet",
+            "event" => "created",
+            "payload" => %{
+              "id" => fleet.id,
+              "name" => fleet.name,
+              "description" => fleet.description,
+              "tenant_id" => fleet.tenant_id
+            }
+          }}, socket}
+
+        {:error, changeset} ->
+          {:reply, {:error, %{reason: "create_failed", details: inspect(changeset.errors)}}, socket}
+      end
+    end
+  end
+
+  def handle_in("fleet:create", payload, socket) when is_map(payload) do
+    handle_in("fleet:create", %{"payload" => payload}, socket)
+  end
+
+  def handle_in("fleet:list", _payload, socket) do
+    tenant_id = socket.assigns.tenant_id
+    fleets = Hub.Fleets.list_fleets(tenant_id)
+
+    {:reply, {:ok, %{
+      "type" => "fleet",
+      "event" => "list",
+      "payload" => %{"fleets" => fleets, "count" => length(fleets)}
+    }}, socket}
+  end
+
+  def handle_in("fleet:update", %{"payload" => payload}, socket) do
+    fleet_id = Map.get(payload, "fleet_id")
+
+    if is_nil(fleet_id) do
+      {:reply, {:error, %{reason: "missing_fleet_id", message: "Payload must include 'fleet_id'."}}, socket}
+    else
+      attrs =
+        %{}
+        |> maybe_put(:name, Map.get(payload, "name"))
+        |> maybe_put(:description, Map.get(payload, "description"))
+
+      case Hub.Fleets.update_fleet(fleet_id, attrs) do
+        {:ok, fleet} ->
+          {:reply, {:ok, %{
+            "type" => "fleet",
+            "event" => "updated",
+            "payload" => %{
+              "id" => fleet.id,
+              "name" => fleet.name,
+              "description" => fleet.description
+            }
+          }}, socket}
+
+        {:error, :not_found} ->
+          {:reply, {:error, %{reason: "not_found", message: "Fleet not found."}}, socket}
+
+        {:error, changeset} ->
+          {:reply, {:error, %{reason: "update_failed", details: inspect(changeset.errors)}}, socket}
+      end
+    end
+  end
+
+  def handle_in("fleet:update", payload, socket) when is_map(payload) do
+    handle_in("fleet:update", %{"payload" => payload}, socket)
+  end
+
+  def handle_in("fleet:delete", %{"payload" => payload}, socket) do
+    fleet_id = Map.get(payload, "fleet_id")
+
+    if is_nil(fleet_id) do
+      {:reply, {:error, %{reason: "missing_fleet_id", message: "Payload must include 'fleet_id'."}}, socket}
+    else
+      case Hub.Fleets.delete_fleet(fleet_id) do
+        {:ok, _} ->
+          {:reply, {:ok, %{
+            "type" => "fleet",
+            "event" => "deleted",
+            "payload" => %{"fleet_id" => fleet_id}
+          }}, socket}
+
+        {:error, :not_found} ->
+          {:reply, {:error, %{reason: "not_found", message: "Fleet not found."}}, socket}
+
+        {:error, :has_agents} ->
+          {:reply, {:error, %{reason: "has_agents", message: "Cannot delete fleet with agents. Move agents first."}}, socket}
+
+        {:error, :last_fleet} ->
+          {:reply, {:error, %{reason: "last_fleet", message: "Cannot delete the last fleet."}}, socket}
+      end
+    end
+  end
+
+  def handle_in("fleet:delete", payload, socket) when is_map(payload) do
+    handle_in("fleet:delete", %{"payload" => payload}, socket)
+  end
+
+  def handle_in("squad:assign_agent", %{"payload" => payload}, socket) do
+    squad_id = Map.get(payload, "squad_id")
+    agent_id = Map.get(payload, "agent_id")
+
+    cond do
+      is_nil(squad_id) ->
+        {:reply, {:error, %{reason: "missing_squad_id"}}, socket}
+
+      is_nil(agent_id) ->
+        {:reply, {:error, %{reason: "missing_agent_id"}}, socket}
+
+      true ->
+        case Hub.Fleets.assign_agent_to_squad(agent_id, squad_id) do
+          {:ok, agent} ->
+            {:reply, {:ok, %{
+              "type" => "squad",
+              "event" => "agent_assigned",
+              "payload" => %{
+                "agent_id" => agent.agent_id,
+                "squad_id" => agent.squad_id,
+                "fleet_id" => agent.fleet_id
+              }
+            }}, socket}
+
+          {:error, reason} ->
+            {:reply, {:error, %{reason: to_string(reason), message: "Failed to assign agent to squad."}}, socket}
+        end
+    end
+  end
+
+  def handle_in("squad:assign_agent", payload, socket) when is_map(payload) do
+    handle_in("squad:assign_agent", %{"payload" => payload}, socket)
+  end
+
+  def handle_in("squad:remove_agent", %{"payload" => payload}, socket) do
+    agent_id = Map.get(payload, "agent_id")
+
+    if is_nil(agent_id) do
+      {:reply, {:error, %{reason: "missing_agent_id"}}, socket}
+    else
+      case Hub.Fleets.remove_agent_from_squad(agent_id) do
+        {:ok, agent} ->
+          {:reply, {:ok, %{
+            "type" => "squad",
+            "event" => "agent_removed",
+            "payload" => %{
+              "agent_id" => agent.agent_id,
+              "fleet_id" => agent.fleet_id
+            }
+          }}, socket}
+
+        {:error, reason} ->
+          {:reply, {:error, %{reason: to_string(reason)}}, socket}
+      end
+    end
+  end
+
+  def handle_in("squad:remove_agent", payload, socket) when is_map(payload) do
+    handle_in("squad:remove_agent", %{"payload" => payload}, socket)
+  end
+
   # ── Groups ──────────────────────────────────────────────────
 
   def handle_in("group:create", %{"payload" => payload} = raw, socket) do

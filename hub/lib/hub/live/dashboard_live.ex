@@ -69,7 +69,22 @@ defmodule Hub.Live.DashboardLive do
           wizard_waiting: false,
           wizard_connected_agent: nil,
           wizard_agent_count_at_open: 0,
-          theme: "system"
+          theme: "system",
+          # Fleet management
+          tenant_fleets: [],
+          selected_fleet_id: nil,
+          fleet_detail: nil,
+          fleet_detail_squads: [],
+          fleet_form_open: false,
+          fleet_form_mode: :create,
+          fleet_form_name: "",
+          fleet_form_description: "",
+          fleet_form_id: nil,
+          squad_form_open: false,
+          squad_form_name: "",
+          squad_form_fleet_id: nil,
+          assign_agent_fleet_open: false,
+          assign_agent_fleet_agent_id: nil
         )
 
         if connected?(socket) do
@@ -84,8 +99,9 @@ defmodule Hub.Live.DashboardLive do
         usage = load_usage(tenant_id)
         registered = load_registered_agents(tenant_id)
         active_keys = load_active_keys(tenant_id)
+        tenant_fleets = Hub.Fleets.list_fleets(tenant_id)
 
-        {:ok, assign(socket, agents: agents, activities: activities, usage: usage, registered_agents: registered, active_keys: active_keys)}
+        {:ok, assign(socket, agents: agents, activities: activities, usage: usage, registered_agents: registered, active_keys: active_keys, tenant_fleets: tenant_fleets)}
 
       {:error, :unauthenticated} ->
         # Read error/tab from URL params (set by SessionController redirect)
@@ -257,6 +273,255 @@ defmodule Hub.Live.DashboardLive do
     agent_id = socket.assigns.selected_agent
     messages = load_conversation(socket.assigns.fleet_id, agent_id)
     {:noreply, assign(socket, current_view: "messaging", msg_to: agent_id, messages: messages, agent_detail_open: false, selected_agent: nil)}
+  end
+
+  # ── Fleet Management Events ─────────────────────────────────
+
+  def handle_event("open_fleet_form", %{"mode" => "create"}, socket) do
+    {:noreply, assign(socket,
+      fleet_form_open: true,
+      fleet_form_mode: :create,
+      fleet_form_name: "",
+      fleet_form_description: "",
+      fleet_form_id: nil
+    )}
+  end
+
+  def handle_event("open_fleet_form", %{"mode" => "edit", "fleet-id" => fleet_id}, socket) do
+    fleet = Enum.find(socket.assigns.tenant_fleets, &(&1.id == fleet_id))
+    if fleet do
+      {:noreply, assign(socket,
+        fleet_form_open: true,
+        fleet_form_mode: :edit,
+        fleet_form_name: fleet.name,
+        fleet_form_description: fleet.description || "",
+        fleet_form_id: fleet_id
+      )}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_fleet_form", _, socket) do
+    {:noreply, assign(socket, fleet_form_open: false)}
+  end
+
+  def handle_event("fleet_form_name", %{"value" => v}, socket) do
+    {:noreply, assign(socket, fleet_form_name: v)}
+  end
+
+  def handle_event("fleet_form_description", %{"value" => v}, socket) do
+    {:noreply, assign(socket, fleet_form_description: v)}
+  end
+
+  def handle_event("save_fleet", _, socket) do
+    name = String.trim(socket.assigns.fleet_form_name)
+    description = String.trim(socket.assigns.fleet_form_description)
+
+    if name == "" do
+      Process.send_after(self(), :clear_toast, 4_000)
+      {:noreply, assign(socket, toast: {:error, "Fleet name cannot be empty"})}
+    else
+      result = case socket.assigns.fleet_form_mode do
+        :create ->
+          attrs = %{name: name}
+          attrs = if description != "", do: Map.put(attrs, :description, description), else: attrs
+          Hub.Fleets.create_fleet(socket.assigns.tenant_id, attrs)
+        :edit ->
+          attrs = %{name: name, description: description}
+          Hub.Fleets.update_fleet(socket.assigns.fleet_form_id, attrs)
+      end
+
+      case result do
+        {:ok, _fleet} ->
+          tenant_fleets = Hub.Fleets.list_fleets(socket.assigns.tenant_id)
+          action = if socket.assigns.fleet_form_mode == :create, do: "created", else: "updated"
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket,
+            tenant_fleets: tenant_fleets,
+            fleet_form_open: false,
+            toast: {:success, "Fleet \"#{name}\" #{action}"}
+          )}
+
+        {:error, changeset} when is_struct(changeset) ->
+          error = Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
+                  |> Enum.map_join(". ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, error})}
+
+        {:error, reason} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, "Failed: #{reason}"})}
+      end
+    end
+  end
+
+  def handle_event("delete_fleet", %{"fleet-id" => fleet_id}, socket) do
+    case Hub.Fleets.delete_fleet(fleet_id) do
+      {:ok, _} ->
+        tenant_fleets = Hub.Fleets.list_fleets(socket.assigns.tenant_id)
+        # If we were viewing this fleet's detail, clear it
+        selected = if socket.assigns.selected_fleet_id == fleet_id, do: nil, else: socket.assigns.selected_fleet_id
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket,
+          tenant_fleets: tenant_fleets,
+          selected_fleet_id: selected,
+          fleet_detail: nil,
+          fleet_detail_squads: [],
+          toast: {:success, "Fleet deleted"}
+        )}
+
+      {:error, :has_agents} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Cannot delete fleet with agents. Move agents first."})}
+
+      {:error, :last_fleet} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Cannot delete the last fleet."})}
+
+      {:error, _reason} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Failed to delete fleet"})}
+    end
+  end
+
+  def handle_event("select_fleet", %{"fleet-id" => fleet_id}, socket) do
+    case Hub.Fleets.get_fleet(fleet_id) do
+      {:ok, fleet, squads} ->
+        {:noreply, assign(socket,
+          selected_fleet_id: fleet_id,
+          fleet_detail: fleet,
+          fleet_detail_squads: squads
+        )}
+
+      {:error, _} ->
+        {:noreply, assign(socket, toast: {:error, "Fleet not found"})}
+    end
+  end
+
+  def handle_event("close_fleet_detail", _, socket) do
+    {:noreply, assign(socket, selected_fleet_id: nil, fleet_detail: nil, fleet_detail_squads: [])}
+  end
+
+  # Squad creation
+  def handle_event("open_squad_form", %{"fleet-id" => fleet_id}, socket) do
+    {:noreply, assign(socket, squad_form_open: true, squad_form_name: "", squad_form_fleet_id: fleet_id)}
+  end
+
+  def handle_event("close_squad_form", _, socket) do
+    {:noreply, assign(socket, squad_form_open: false)}
+  end
+
+  def handle_event("squad_form_name", %{"value" => v}, socket) do
+    {:noreply, assign(socket, squad_form_name: v)}
+  end
+
+  def handle_event("save_squad", _, socket) do
+    name = String.trim(socket.assigns.squad_form_name)
+    fleet_id = socket.assigns.squad_form_fleet_id
+
+    if name == "" do
+      Process.send_after(self(), :clear_toast, 4_000)
+      {:noreply, assign(socket, toast: {:error, "Squad name cannot be empty"})}
+    else
+      case Hub.Fleets.create_squad(fleet_id, %{name: name}) do
+        {:ok, _squad} ->
+          # Reload fleet detail and fleet list
+          {:ok, fleet, squads} = Hub.Fleets.get_fleet(fleet_id)
+          tenant_fleets = Hub.Fleets.list_fleets(socket.assigns.tenant_id)
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket,
+            fleet_detail: fleet,
+            fleet_detail_squads: squads,
+            tenant_fleets: tenant_fleets,
+            squad_form_open: false,
+            toast: {:success, "Squad \"#{name}\" created"}
+          )}
+
+        {:error, changeset} when is_struct(changeset) ->
+          error = Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
+                  |> Enum.map_join(". ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, error})}
+
+        {:error, reason} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, "Failed: #{reason}"})}
+      end
+    end
+  end
+
+  # Assign agent to squad (from select dropdown — params include the select name as key)
+  def handle_event("assign_to_squad", params, socket) do
+    # The select sends params like %{"squad-ag_xxx" => "squad_uuid_here", "agent-id" => "ag_xxx"}
+    # Extract agent_id from phx-value and squad_id from the select value
+    agent_id = Map.get(params, "agent-id")
+    squad_id = params |> Enum.find_value(fn {k, v} -> if String.starts_with?(k, "squad-"), do: v end)
+
+    if is_nil(squad_id) or squad_id == "" do
+      {:noreply, socket}
+    else
+      case Hub.Fleets.assign_agent_to_squad(agent_id, squad_id) do
+        {:ok, _agent} ->
+          fleet_id = socket.assigns.selected_fleet_id
+          {:ok, fleet, squads} = Hub.Fleets.get_fleet(fleet_id)
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket,
+            fleet_detail: fleet,
+            fleet_detail_squads: squads,
+            toast: {:success, "Agent assigned to squad"}
+          )}
+
+        {:error, reason} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, "Failed: #{reason}"})}
+      end
+    end
+  end
+
+  def handle_event("remove_from_squad", %{"agent-id" => agent_id}, socket) do
+    case Hub.Fleets.remove_agent_from_squad(agent_id) do
+      {:ok, _agent} ->
+        fleet_id = socket.assigns.selected_fleet_id
+        {:ok, fleet, squads} = Hub.Fleets.get_fleet(fleet_id)
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket,
+          fleet_detail: fleet,
+          fleet_detail_squads: squads,
+          toast: {:success, "Agent removed from squad"}
+        )}
+
+      {:error, reason} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Failed: #{reason}"})}
+    end
+  end
+
+  # Move agent to different fleet
+  def handle_event("move_agent_to_fleet", %{"agent-id" => agent_id, "fleet-id" => fleet_id}, socket) do
+    case Hub.Fleets.assign_agent_to_fleet(agent_id, fleet_id) do
+      {:ok, _agent} ->
+        # Reload everything
+        tenant_fleets = Hub.Fleets.list_fleets(socket.assigns.tenant_id)
+        socket = assign(socket, tenant_fleets: tenant_fleets)
+
+        socket = if socket.assigns.selected_fleet_id do
+          case Hub.Fleets.get_fleet(socket.assigns.selected_fleet_id) do
+            {:ok, fleet, squads} ->
+              assign(socket, fleet_detail: fleet, fleet_detail_squads: squads)
+            _ -> socket
+          end
+        else
+          socket
+        end
+
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:success, "Agent moved to fleet"})}
+
+      {:error, reason} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Failed: #{reason}"})}
+    end
   end
 
   # Filter / Search / Sort
@@ -1039,6 +1304,7 @@ defmodule Hub.Live.DashboardLive do
               <span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Menu</span>
             </div>
             <Components.nav_item view="dashboard" icon={:layout_dashboard} label="Dashboard" active={@current_view == "dashboard"} />
+            <Components.nav_item view="fleets" icon={:layers} label="Fleets" active={@current_view == "fleets"} badge={to_string(length(@tenant_fleets))} />
             <Components.nav_item view="agents" icon={:bot} label="Agents" active={@current_view == "agents"} badge={to_string(map_size(@agents))} />
             <Components.nav_item view="activity" icon={:activity} label="Activity" active={@current_view == "activity"} />
             <Components.nav_item view="messaging" icon={:message_square} label="Messaging" active={@current_view == "messaging"} />
@@ -1065,6 +1331,7 @@ defmodule Hub.Live.DashboardLive do
         <main class="flex-1 min-w-0 overflow-hidden bg-zinc-950">
           <%= case @current_view do %>
             <% "dashboard" -> %> <%= render_overview(assigns) %>
+            <% "fleets" -> %> <%= render_fleets(assigns) %>
             <% "agents" -> %> <%= render_agents(assigns) %>
             <% "activity" -> %> <%= render_activity(assigns) %>
             <% "messaging" -> %> <%= render_messaging(assigns) %>
@@ -1188,6 +1455,385 @@ defmodule Hub.Live.DashboardLive do
           </div>
         </div>
       </div>
+    </div>
+    """
+  end
+
+  # ══════════════════════════════════════════════════════════
+  # Page: Fleets
+  # ══════════════════════════════════════════════════════════
+
+  defp render_fleets(assigns) do
+    ~H"""
+    <div class="h-full flex animate-fade-in">
+      <%!-- Fleet list panel --%>
+      <div class="w-72 border-r border-zinc-800 flex flex-col overflow-hidden shrink-0 bg-zinc-900">
+        <div class="px-4 py-4 border-b border-zinc-800">
+          <div class="flex items-center justify-between mb-1">
+            <h2 class="text-sm font-semibold text-zinc-100">Fleets</h2>
+            <.button variant="outline" size="sm" phx-click="open_fleet_form" phx-value-mode="create"
+              class="h-7 px-2.5 text-[10px] border-amber-500/30 text-amber-400 hover:bg-amber-500/10">
+              <Icons.plus class="w-3 h-3 mr-1" /> New Fleet
+            </.button>
+          </div>
+          <p class="text-[11px] text-zinc-500"><%= length(@tenant_fleets) %> fleet<%= if length(@tenant_fleets) != 1, do: "s" %></p>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-2 space-y-1">
+          <%= for fleet <- @tenant_fleets do %>
+            <button
+              phx-click="select_fleet"
+              phx-value-fleet-id={fleet.id}
+              class={"w-full text-left px-3 py-2.5 rounded-lg transition-colors duration-150 group " <>
+                if(@selected_fleet_id == fleet.id, do: "bg-zinc-800 border border-zinc-700", else: "hover:bg-zinc-800/50 border border-transparent")}
+            >
+              <div class="flex items-center justify-between">
+                <div class="min-w-0 flex-1">
+                  <div class="text-sm font-medium text-zinc-200 truncate"><%= fleet.name %></div>
+                  <%= if fleet.description && fleet.description != "" do %>
+                    <div class="text-[10px] text-zinc-500 truncate mt-0.5"><%= fleet.description %></div>
+                  <% end %>
+                </div>
+                <div class="flex items-center gap-2 ml-2 shrink-0">
+                  <div class="flex items-center gap-1">
+                    <Icons.bot class="w-3 h-3 text-zinc-600" />
+                    <span class="text-[10px] text-zinc-500"><%= fleet.agent_count %></span>
+                  </div>
+                  <div class="flex items-center gap-1">
+                    <Icons.users class="w-3 h-3 text-zinc-600" />
+                    <span class="text-[10px] text-zinc-500"><%= fleet.squad_count %></span>
+                  </div>
+                </div>
+              </div>
+            </button>
+          <% end %>
+
+          <%= if @tenant_fleets == [] do %>
+            <div class="text-center py-8">
+              <Icons.layers class="w-8 h-8 text-zinc-700 mx-auto mb-2" />
+              <p class="text-xs text-zinc-600">No fleets yet</p>
+            </div>
+          <% end %>
+        </div>
+      </div>
+
+      <%!-- Fleet detail panel --%>
+      <div class="flex-1 overflow-y-auto">
+        <%= if @fleet_detail do %>
+          <div class="p-6 space-y-6">
+            <%!-- Fleet header --%>
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="flex items-center gap-3">
+                  <div class="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/25 flex items-center justify-center">
+                    <Icons.layers class="w-5 h-5 text-amber-400" />
+                  </div>
+                  <div>
+                    <h2 class="text-lg font-semibold text-zinc-100"><%= @fleet_detail.name %></h2>
+                    <%= if @fleet_detail.description && @fleet_detail.description != "" do %>
+                      <p class="text-sm text-zinc-500"><%= @fleet_detail.description %></p>
+                    <% end %>
+                  </div>
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <.button variant="outline" size="sm"
+                  phx-click="open_fleet_form"
+                  phx-value-mode="edit"
+                  phx-value-fleet-id={@fleet_detail.id}
+                  class="h-8 text-xs border-zinc-700 text-zinc-400 hover:text-zinc-200">
+                  <Icons.pencil class="w-3.5 h-3.5 mr-1.5" /> Edit
+                </.button>
+                <.button variant="outline" size="sm"
+                  phx-click="delete_fleet"
+                  phx-value-fleet-id={@fleet_detail.id}
+                  data-confirm={"Delete fleet \"#{@fleet_detail.name}\"? This cannot be undone."}
+                  class="h-8 text-xs border-red-500/20 text-red-400/70 hover:bg-red-500/10 hover:text-red-300">
+                  <Icons.trash class="w-3.5 h-3.5 mr-1.5" /> Delete
+                </.button>
+              </div>
+            </div>
+
+            <%!-- Stats --%>
+            <div class="grid grid-cols-3 gap-3">
+              <.card class="bg-zinc-900 border-zinc-800">
+                <.card_content class="p-3 text-center">
+                  <div class="text-xl font-bold text-zinc-100"><%= length(@fleet_detail.agents) %></div>
+                  <div class="text-[10px] text-zinc-500 mt-0.5">Agents</div>
+                </.card_content>
+              </.card>
+              <.card class="bg-zinc-900 border-zinc-800">
+                <.card_content class="p-3 text-center">
+                  <div class="text-xl font-bold text-zinc-100"><%= length(@fleet_detail_squads) %></div>
+                  <div class="text-[10px] text-zinc-500 mt-0.5">Squads</div>
+                </.card_content>
+              </.card>
+              <.card class="bg-zinc-900 border-zinc-800">
+                <.card_content class="p-3 text-center">
+                  <% unassigned = Enum.count(@fleet_detail.agents, &is_nil(&1.squad_id)) %>
+                  <div class="text-xl font-bold text-zinc-100"><%= unassigned %></div>
+                  <div class="text-[10px] text-zinc-500 mt-0.5">Unassigned</div>
+                </.card_content>
+              </.card>
+            </div>
+
+            <%!-- Squads section --%>
+            <div>
+              <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-medium text-zinc-300">Squads</h3>
+                <.button variant="outline" size="sm"
+                  phx-click="open_squad_form"
+                  phx-value-fleet-id={@fleet_detail.id}
+                  class="h-7 px-2.5 text-[10px] border-amber-500/30 text-amber-400 hover:bg-amber-500/10">
+                  <Icons.plus class="w-3 h-3 mr-1" /> New Squad
+                </.button>
+              </div>
+
+              <%= if @fleet_detail_squads == [] do %>
+                <.card class="bg-zinc-900 border-zinc-800">
+                  <.card_content class="p-6 text-center">
+                    <Icons.users class="w-8 h-8 text-zinc-700 mx-auto mb-2" />
+                    <p class="text-sm text-zinc-500">No squads yet</p>
+                    <p class="text-[11px] text-zinc-600 mt-1">Create a squad to organize agents into teams</p>
+                  </.card_content>
+                </.card>
+              <% else %>
+                <div class="space-y-3">
+                  <%= for squad <- @fleet_detail_squads do %>
+                    <% squad_agents = Enum.filter(@fleet_detail.agents, &(&1.squad_id == squad.id)) %>
+                    <.card class="bg-zinc-900 border-zinc-800">
+                      <.card_content class="p-4">
+                        <div class="flex items-center justify-between mb-3">
+                          <div class="flex items-center gap-2">
+                            <div class="w-7 h-7 rounded-lg bg-blue-500/15 flex items-center justify-center">
+                              <Icons.users class="w-3.5 h-3.5 text-blue-400" />
+                            </div>
+                            <div>
+                              <div class="text-sm font-medium text-zinc-200"><%= squad.name %></div>
+                              <div class="text-[10px] text-zinc-500"><%= length(squad_agents) %> agent<%= if length(squad_agents) != 1, do: "s" %></div>
+                            </div>
+                          </div>
+                          <%= if squad.capabilities != [] do %>
+                            <div class="flex gap-1">
+                              <%= for cap <- Enum.take(squad.capabilities, 3) do %>
+                                <.badge variant="outline" class="text-[9px] px-1.5 py-0 bg-blue-500/10 text-blue-400 border-blue-500/15"><%= cap %></.badge>
+                              <% end %>
+                            </div>
+                          <% end %>
+                        </div>
+
+                        <%= if squad_agents != [] do %>
+                          <div class="space-y-1">
+                            <%= for agent <- squad_agents do %>
+                              <div class="flex items-center justify-between py-1.5 px-2 rounded-md bg-zinc-800/50 group">
+                                <div class="flex items-center gap-2">
+                                  <div class="w-5 h-5 rounded-md bg-zinc-700 flex items-center justify-center text-[9px] font-bold text-zinc-400">
+                                    <%= String.first(agent.name || agent.agent_id) |> String.upcase() %>
+                                  </div>
+                                  <span class="text-xs text-zinc-300"><%= agent.name || agent.agent_id %></span>
+                                  <span class="text-[10px] text-zinc-600 font-mono"><%= agent.agent_id %></span>
+                                </div>
+                                <button
+                                  phx-click="remove_from_squad"
+                                  phx-value-agent-id={agent.agent_id}
+                                  class="text-[10px] text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                                  title="Remove from squad"
+                                >
+                                  <Icons.x class="w-3 h-3" />
+                                </button>
+                              </div>
+                            <% end %>
+                          </div>
+                        <% else %>
+                          <p class="text-[11px] text-zinc-600 italic">No agents in this squad</p>
+                        <% end %>
+                      </.card_content>
+                    </.card>
+                  <% end %>
+                </div>
+              <% end %>
+            </div>
+
+            <%!-- Unassigned agents --%>
+            <div>
+              <h3 class="text-sm font-medium text-zinc-300 mb-3">Agents in Fleet</h3>
+              <% unassigned_agents = Enum.filter(@fleet_detail.agents, &is_nil(&1.squad_id)) %>
+              <% assigned_agents = Enum.reject(@fleet_detail.agents, &is_nil(&1.squad_id)) %>
+
+              <%= if @fleet_detail.agents == [] do %>
+                <.card class="bg-zinc-900 border-zinc-800">
+                  <.card_content class="p-6 text-center">
+                    <Icons.bot class="w-8 h-8 text-zinc-700 mx-auto mb-2" />
+                    <p class="text-sm text-zinc-500">No agents in this fleet</p>
+                  </.card_content>
+                </.card>
+              <% else %>
+                <%= if unassigned_agents != [] do %>
+                  <div class="mb-3">
+                    <div class="text-[10px] text-zinc-500 uppercase tracking-wider mb-2 font-medium">Unassigned (<%= length(unassigned_agents) %>)</div>
+                    <div class="space-y-1">
+                      <%= for agent <- unassigned_agents do %>
+                        <div class="flex items-center justify-between py-2 px-3 rounded-lg bg-zinc-900 border border-zinc-800 group">
+                          <div class="flex items-center gap-2.5">
+                            <div class="w-6 h-6 rounded-lg bg-zinc-800 flex items-center justify-center text-[10px] font-bold text-zinc-400">
+                              <%= String.first(agent.name || agent.agent_id) |> String.upcase() %>
+                            </div>
+                            <div>
+                              <div class="text-xs font-medium text-zinc-200"><%= agent.name || agent.agent_id %></div>
+                              <div class="text-[10px] text-zinc-600 font-mono"><%= agent.agent_id %></div>
+                            </div>
+                          </div>
+                          <div class="flex items-center gap-1">
+                            <%= if @fleet_detail_squads != [] do %>
+                              <div class="relative">
+                                <select
+                                  phx-change="assign_to_squad"
+                                  phx-value-agent-id={agent.agent_id}
+                                  name={"squad-#{agent.agent_id}"}
+                                  class="h-7 px-2 text-[10px] bg-zinc-800 border border-zinc-700 rounded text-zinc-400 focus:border-amber-500/50 focus:outline-none appearance-none pr-6 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                  <option value="">Assign to squad…</option>
+                                  <%= for squad <- @fleet_detail_squads do %>
+                                    <option value={squad.id}><%= squad.name %></option>
+                                  <% end %>
+                                </select>
+                              </div>
+                            <% end %>
+                          </div>
+                        </div>
+                      <% end %>
+                    </div>
+                  </div>
+                <% end %>
+
+                <%= if assigned_agents != [] do %>
+                  <div>
+                    <div class="text-[10px] text-zinc-500 uppercase tracking-wider mb-2 font-medium">Assigned (<%= length(assigned_agents) %>)</div>
+                    <div class="space-y-1">
+                      <%= for agent <- assigned_agents do %>
+                        <% squad = Enum.find(@fleet_detail_squads, &(&1.id == agent.squad_id)) %>
+                        <div class="flex items-center justify-between py-2 px-3 rounded-lg bg-zinc-900 border border-zinc-800">
+                          <div class="flex items-center gap-2.5">
+                            <div class="w-6 h-6 rounded-lg bg-blue-500/15 flex items-center justify-center text-[10px] font-bold text-blue-400">
+                              <%= String.first(agent.name || agent.agent_id) |> String.upcase() %>
+                            </div>
+                            <div>
+                              <div class="text-xs font-medium text-zinc-200"><%= agent.name || agent.agent_id %></div>
+                              <div class="text-[10px] text-zinc-600 font-mono"><%= agent.agent_id %></div>
+                            </div>
+                          </div>
+                          <div class="flex items-center gap-2">
+                            <.badge variant="outline" class="text-[9px] bg-blue-500/10 text-blue-400 border-blue-500/15">
+                              <%= if squad, do: squad.name, else: "Unknown squad" %>
+                            </.badge>
+                          </div>
+                        </div>
+                      <% end %>
+                    </div>
+                  </div>
+                <% end %>
+              <% end %>
+            </div>
+
+            <%!-- Fleet ID for reference --%>
+            <div class="text-[10px] text-zinc-600 font-mono pt-4 border-t border-zinc-800">
+              Fleet ID: <%= @fleet_detail.id %>
+            </div>
+          </div>
+        <% else %>
+          <%!-- No fleet selected --%>
+          <div class="flex-1 flex items-center justify-center h-full">
+            <div class="text-center">
+              <div class="w-14 h-14 rounded-2xl bg-zinc-800 flex items-center justify-center mb-4 mx-auto">
+                <Icons.layers class="w-6 h-6 text-zinc-600" />
+              </div>
+              <p class="font-medium text-zinc-400">Select a fleet</p>
+              <p class="text-sm text-zinc-500 mt-1">Choose from the list or create a new one</p>
+            </div>
+          </div>
+        <% end %>
+      </div>
+
+      <%!-- Fleet create/edit modal --%>
+      <%= if @fleet_form_open do %>
+        <div class="fixed inset-0 z-[60] flex items-center justify-center animate-fade-in">
+          <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" phx-click="close_fleet_form"></div>
+          <div class="relative w-full max-w-md mx-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl">
+            <div class="px-6 py-4 border-b border-zinc-800">
+              <h3 class="text-sm font-semibold text-zinc-100">
+                <%= if @fleet_form_mode == :create, do: "Create Fleet", else: "Edit Fleet" %>
+              </h3>
+            </div>
+            <div class="px-6 py-5 space-y-4">
+              <div>
+                <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Name</label>
+                <.input
+                  type="text"
+                  name="fleet_name"
+                  value={@fleet_form_name}
+                  phx-keyup="fleet_form_name"
+                  placeholder="e.g. Production, Staging, Dev"
+                  autofocus
+                  class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                />
+              </div>
+              <div>
+                <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Description <span class="text-zinc-600">(optional)</span></label>
+                <.input
+                  type="text"
+                  name="fleet_description"
+                  value={@fleet_form_description}
+                  phx-keyup="fleet_form_description"
+                  placeholder="What is this fleet for?"
+                  class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                />
+              </div>
+              <div class="flex items-center justify-end gap-2 pt-2">
+                <.button variant="outline" phx-click="close_fleet_form" class="border-zinc-700 text-zinc-400 hover:text-zinc-200">
+                  Cancel
+                </.button>
+                <.button phx-click="save_fleet" class="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs">
+                  <%= if @fleet_form_mode == :create, do: "Create Fleet", else: "Save Changes" %>
+                </.button>
+              </div>
+            </div>
+          </div>
+        </div>
+      <% end %>
+
+      <%!-- Squad create modal --%>
+      <%= if @squad_form_open do %>
+        <div class="fixed inset-0 z-[60] flex items-center justify-center animate-fade-in">
+          <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" phx-click="close_squad_form"></div>
+          <div class="relative w-full max-w-md mx-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl">
+            <div class="px-6 py-4 border-b border-zinc-800">
+              <h3 class="text-sm font-semibold text-zinc-100">Create Squad</h3>
+            </div>
+            <div class="px-6 py-5 space-y-4">
+              <div>
+                <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Squad Name</label>
+                <.input
+                  type="text"
+                  name="squad_name"
+                  value={@squad_form_name}
+                  phx-keyup="squad_form_name"
+                  placeholder="e.g. DevOps, Research, Frontend"
+                  autofocus
+                  class="w-full bg-zinc-950 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50"
+                />
+              </div>
+              <div class="flex items-center justify-end gap-2 pt-2">
+                <.button variant="outline" phx-click="close_squad_form" class="border-zinc-700 text-zinc-400 hover:text-zinc-200">
+                  Cancel
+                </.button>
+                <.button phx-click="save_squad" class="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs">
+                  Create Squad
+                </.button>
+              </div>
+            </div>
+          </div>
+        </div>
+      <% end %>
     </div>
     """
   end

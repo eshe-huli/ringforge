@@ -12,17 +12,19 @@ defmodule Hub.Auth.Fleet do
 
   schema "fleets" do
     field :name, :string, default: "default"
+    field :description, :string
 
     belongs_to :tenant, Hub.Auth.Tenant
     has_many :agents, Hub.Auth.Agent
     has_many :api_keys, Hub.Auth.ApiKey
+    has_many :groups, Hub.Groups.Group
 
     timestamps()
   end
 
   def changeset(fleet, attrs) do
     fleet
-    |> cast(attrs, [:name, :tenant_id])
+    |> cast(attrs, [:name, :description, :tenant_id])
     |> validate_required([:tenant_id])
     |> unique_constraint([:tenant_id, :name])
   end
