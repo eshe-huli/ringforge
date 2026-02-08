@@ -2099,8 +2099,8 @@ defmodule Hub.Live.DashboardLive do
   end
 
   # Delivery receipt — agent confirmed they received our message
-  def handle_info({:message_receipt, receipt}, socket) do
-    # Could update message status in UI; for now just log
+  def handle_info({:message_receipt, _receipt}, socket) do
+    # Could update message status in UI; for now just acknowledge
     {:noreply, socket}
   end
 

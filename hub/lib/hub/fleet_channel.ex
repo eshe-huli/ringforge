@@ -1829,11 +1829,19 @@ defmodule Hub.FleetChannel do
 
   # Replaces raw direct:send with hierarchy-aware routing
   def handle_in("message:send", %{"payload" => %{"to" => to, "body" => body} = payload}, socket) do
+    # Handle encrypted messages — decrypt if sealed/encrypted
+    body = case Hub.Messaging.Crypto.process_incoming(body, socket.assigns.fleet_id) do
+      {:ok, decrypted} when is_map(decrypted) -> decrypted
+      {:ok, decrypted} when is_binary(decrypted) -> %{"text" => decrypted}
+      _ -> body  # Pass through if not encrypted or decryption fails
+    end
+
     message = %{
       "body" => body,
       "refs" => Map.get(payload, "refs", []),
       "metadata" => Map.get(payload, "metadata", %{}),
-      "priority" => Map.get(payload, "priority", "normal")
+      "priority" => Map.get(payload, "priority", "normal"),
+      "encrypted" => Map.has_key?(payload, "sealed") || Map.has_key?(payload, "encrypted")
     }
 
     case Hub.Messaging.Router.route_dm(socket.assigns.fleet_id, socket.assigns.agent_id, to, message) do
