@@ -123,6 +123,7 @@ defmodule Hub.Layouts do
           :root:not(.dark) .bg-zinc-800\/50 { background-color: rgba(241,245,249,0.7) !important; }
           :root:not(.dark) .bg-zinc-800\/40 { background-color: rgba(241,245,249,0.6) !important; }
           :root:not(.dark) .bg-zinc-800\/70 { background-color: rgba(241,245,249,0.8) !important; }
+          :root:not(.dark) .bg-zinc-800\/80 { background-color: rgba(241,245,249,0.9) !important; }
           :root:not(.dark) .bg-\[\#09090b\] { background-color: #f8fafc !important; }
           :root:not(.dark) .bg-\[\#111119\] { background-color: #ffffff !important; }
           :root:not(.dark) .hover\:bg-zinc-800\/50:hover { background-color: rgba(241,245,249,0.9) !important; }
