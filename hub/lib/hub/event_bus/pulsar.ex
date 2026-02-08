@@ -191,7 +191,7 @@ defmodule Hub.EventBus.Pulsar do
 
   @impl GenServer
   def handle_info(:check_connection, state) do
-    _url = "#{state.web_url}/admin/v2/clusters"
+    url = "#{state.web_url}/admin/v2/clusters"
 
     connected =
       case :httpc.request(:get, {String.to_charlist(url), []}, [{:timeout, 5_000}], []) do
