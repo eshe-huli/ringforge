@@ -9,7 +9,6 @@ defmodule Hub.Live.DevicesLive do
   use SaladUI
 
   alias Hub.Devices
-  alias Hub.Live.Icons
 
   # ══════════════════════════════════════════════════════════
   # Mount

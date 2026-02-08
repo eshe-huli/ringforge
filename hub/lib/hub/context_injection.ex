@@ -64,7 +64,7 @@ defmodule Hub.ContextInjection do
   defp auto_detect_tier(agent) do
     model = (agent.metadata["model"] || agent.name || "") |> String.downcase()
     framework = (agent.framework || "") |> String.downcase()
-    caps = agent.capabilities || []
+    _caps = agent.capabilities || []
 
     cond do
       # Tier 1: Known powerful models

@@ -27,7 +27,6 @@ defmodule Hub.Messaging.Escalation do
 
   @pubsub Hub.PubSub
 
-  @statuses ~w(pending forwarded handled rejected)
 
   @base62 ~c"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 

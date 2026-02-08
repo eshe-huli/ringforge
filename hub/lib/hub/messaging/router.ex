@@ -12,8 +12,6 @@ defmodule Hub.Messaging.Router do
   require Logger
 
   alias Hub.Messaging.{AccessControl, RateLimiter, Escalation, BusinessRules}
-  alias Hub.ContextInjection
-  alias Hub.Auth
   alias Hub.Auth.Agent
   alias Hub.Repo
 

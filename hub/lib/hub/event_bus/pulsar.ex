@@ -191,7 +191,7 @@ defmodule Hub.EventBus.Pulsar do
 
   @impl GenServer
   def handle_info(:check_connection, state) do
-    url = "#{state.web_url}/admin/v2/clusters"
+    _url = "#{state.web_url}/admin/v2/clusters"
 
     connected =
       case :httpc.request(:get, {String.to_charlist(url), []}, [{:timeout, 5_000}], []) do
@@ -234,7 +234,7 @@ defmodule Hub.EventBus.Pulsar do
   defp publish_to_pulsar(state, topic, event) do
     # Pulsar topic name: persistent://{tenant}/{namespace}/{topic}
     pulsar_topic = sanitize_topic(topic)
-    url = "#{state.web_url}/admin/v2/persistent/#{state.tenant}/#{state.namespace}/#{pulsar_topic}"
+    _url = "#{state.web_url}/admin/v2/persistent/#{state.tenant}/#{state.namespace}/#{pulsar_topic}"
 
     # Use Pulsar's REST producer API
     # POST to /topics/{topic}/produce with JSON payload

@@ -2282,8 +2282,8 @@ defmodule Hub.FleetChannel do
   end
 
   def handle_in("kanban:claim", %{"payload" => %{"task_id" => task_id}}, socket) do
-    with {:ok, task} <- Hub.Kanban.get_task(task_id),
-         {:ok, task} <- Hub.Kanban.update_task(task_id, %{"assigned_to" => socket.assigns.agent_id}),
+    with {:ok, _task} <- Hub.Kanban.get_task(task_id),
+         {:ok, _updated_task} <- Hub.Kanban.update_task(task_id, %{"assigned_to" => socket.assigns.agent_id}),
          {:ok, task} <- Hub.Kanban.move_task(task_id, "in_progress", socket.assigns.agent_id, "claimed") do
       broadcast!(socket, "kanban:task_claimed", %{
         "type" => "kanban",

@@ -1081,9 +1081,10 @@ defmodule Hub.Live.DashboardLive do
   end
 
   # Members
-  def handle_event("squad_add_member", %{"agent-id" => agent_id}, socket) do
+  def handle_event("squad_add_member", params, socket) do
+    agent_id = Map.get(params, "agent-id") || Map.get(params, "value")
     squad = socket.assigns.selected_squad
-    if squad do
+    if squad && is_binary(agent_id) && agent_id != "" do
       case Hub.Fleets.assign_agent_to_squad(agent_id, squad.id) do
         {:ok, _} ->
           members = Hub.Fleets.squad_agents(squad.id)
@@ -1125,7 +1126,7 @@ defmodule Hub.Live.DashboardLive do
     agent_id = Map.get(params, "agent-id") || Map.get(params, "value")
     agent_id = if is_binary(agent_id) && agent_id != "", do: agent_id, else: nil
     squad = socket.assigns.selected_squad
-    if squad do
+    if squad && agent_id do
       # Find squad-leader role template, then assign to agent
       leader_role = try do
         case Hub.Roles.get_role_by_slug("squad-leader", socket.assigns.tenant_id) do
@@ -3280,7 +3281,7 @@ defmodule Hub.Live.DashboardLive do
                         <% :users -> %> <Icons.users class="w-3.5 h-3.5" />
                         <% :database -> %> <Icons.database class="w-3.5 h-3.5" />
                         <% :activity -> %> <Icons.activity class="w-3.5 h-3.5" />
-                        <% _ -> %> <Icons.circle class="w-3.5 h-3.5" />
+                        <% _ -> %> <Icons.circle_dot class="w-3.5 h-3.5" />
                       <% end %>
                       <%= label %>
                     </div>

@@ -34,12 +34,6 @@ defmodule Hub.Kanban do
     "cancelled" => ~w(backlog)
   }
 
-  @priority_sort %{
-    "critical" => 0,
-    "high" => 1,
-    "medium" => 2,
-    "low" => 3
-  }
 
   # ════════════════════════════════════════════════════════════
   # Task CRUD
