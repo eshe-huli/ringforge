@@ -221,6 +221,64 @@ defmodule Hub.FleetChannel do
       "payload" => Map.drop(envelope, ["to"])
     })
 
+    # Send delivery receipt back to sender
+    if sender_id = get_in(envelope, ["from", "agent_id"]) do
+      Phoenix.PubSub.broadcast(
+        Hub.PubSub,
+        "fleet:#{socket.assigns.fleet_id}:agent:#{sender_id}",
+        {:message_receipt, %{
+          "message_id" => envelope["message_id"],
+          "to" => socket.assigns.agent_id,
+          "status" => "delivered",
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        }}
+      )
+    end
+
+    {:noreply, socket}
+  end
+
+  # Delivery receipt (from PubSub — target agent received our message)
+  def handle_info({:message_receipt, receipt}, socket) do
+    push(socket, "message:receipt", %{
+      "type" => "message",
+      "event" => "receipt",
+      "payload" => receipt
+    })
+
+    {:noreply, socket}
+  end
+
+  # Read receipt (from PubSub — target agent read our message)
+  def handle_info({:message_read, data}, socket) do
+    push(socket, "message:read", %{
+      "type" => "message",
+      "event" => "read",
+      "payload" => data
+    })
+
+    {:noreply, socket}
+  end
+
+  # Typing indicator (from PubSub — another agent is typing to us)
+  def handle_info({:typing_indicator, data}, socket) do
+    push(socket, "message:typing", %{
+      "type" => "message",
+      "event" => "typing",
+      "payload" => data
+    })
+
+    {:noreply, socket}
+  end
+
+  # Notification delivery (from PubSub — new notification for this agent)
+  def handle_info({:notification, notification}, socket) do
+    push(socket, "notification", %{
+      "type" => "notification",
+      "event" => "new",
+      "payload" => notification
+    })
+
     {:noreply, socket}
   end
 
@@ -2062,6 +2120,140 @@ defmodule Hub.FleetChannel do
     end
   end
 
+  # ── Read Receipt — agent marks a message as read ─────────
+
+  def handle_in("message:read", %{"payload" => %{"message_id" => msg_id}}, socket) do
+    # Broadcast read receipt to all fleet agents (sender will pick it up)
+    Phoenix.PubSub.broadcast(
+      Hub.PubSub,
+      "fleet:#{socket.assigns.fleet_id}",
+      {:message_read, %{
+        "message_id" => msg_id,
+        "read_by" => socket.assigns.agent_id,
+        "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+      }}
+    )
+
+    {:reply, {:ok, %{"status" => "ack"}}, socket}
+  end
+
+  def handle_in("message:read", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_message_id"}}, socket}
+  end
+
+  # ── Typing Indicator ───────────────────────────────────────
+
+  def handle_in("message:typing", %{"payload" => %{"to" => to}}, socket) do
+    Phoenix.PubSub.broadcast(
+      Hub.PubSub,
+      "fleet:#{socket.assigns.fleet_id}:agent:#{to}",
+      {:typing_indicator, %{
+        "agent_id" => socket.assigns.agent_id,
+        "name" => get_agent_name(socket),
+        "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+      }}
+    )
+
+    {:noreply, socket}
+  end
+
+  def handle_in("message:typing", _payload, socket) do
+    {:noreply, socket}
+  end
+
+  # ── Message History — retrieve DM history ──────────────────
+
+  def handle_in("message:history", %{"payload" => %{"with" => agent_id} = payload}, socket) do
+    limit = Map.get(payload, "limit", 50)
+
+    case Hub.DirectMessage.history(
+           socket.assigns.fleet_id,
+           socket.assigns.agent_id,
+           agent_id,
+           limit: limit
+         ) do
+      {:ok, messages} ->
+        {:reply, {:ok, %{
+          "type" => "message",
+          "event" => "history",
+          "payload" => %{
+            "with" => agent_id,
+            "messages" => messages,
+            "count" => length(messages)
+          }
+        }}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => "history failed: #{inspect(reason)}"}}, socket}
+    end
+  end
+
+  def handle_in("message:history", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_with_agent_id"}}, socket}
+  end
+
+  # ── Offline Queue — check queued messages ──────────────────
+
+  def handle_in("message:queued", _payload, socket) do
+    queued = Hub.DirectMessage.list_queued(socket.assigns.fleet_id, socket.assigns.agent_id)
+
+    {:reply, {:ok, %{
+      "type" => "message",
+      "event" => "queued",
+      "payload" => %{
+        "messages" => queued,
+        "count" => length(queued)
+      }
+    }}, socket}
+  end
+
+  # ── Notification Handlers ──────────────────────────────────
+
+  def handle_in("notification:list", _payload, socket) do
+    notifications = Hub.Messaging.Notifications.list(
+      socket.assigns.fleet_id,
+      socket.assigns.agent_id
+    )
+
+    {:reply, {:ok, %{
+      "type" => "notification",
+      "event" => "list",
+      "payload" => %{"notifications" => notifications, "count" => length(notifications)}
+    }}, socket}
+  end
+
+  def handle_in("notification:read", %{"payload" => %{"id" => id}}, socket) do
+    Hub.Messaging.Notifications.mark_read(
+      socket.assigns.fleet_id,
+      socket.assigns.agent_id,
+      id
+    )
+
+    {:reply, {:ok, %{"status" => "read"}}, socket}
+  end
+
+  def handle_in("notification:read", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_notification_id"}}, socket}
+  end
+
+  def handle_in("notification:read_all", _payload, socket) do
+    Hub.Messaging.Notifications.mark_all_read(
+      socket.assigns.fleet_id,
+      socket.assigns.agent_id
+    )
+
+    {:reply, {:ok, %{"status" => "all_read"}}, socket}
+  end
+
+  def handle_in("notification:unread_count", _payload, socket) do
+    count = Hub.Messaging.Notifications.unread_count(
+      socket.assigns.fleet_id,
+      socket.assigns.agent_id
+    )
+
+    {:reply, {:ok, %{"unread_count" => count}}, socket}
+  end
+
   # Thread PubSub notifications
   def handle_info({:thread_message, msg}, socket) do
     push(socket, "thread:message", %{
@@ -2282,7 +2474,7 @@ defmodule Hub.FleetChannel do
   end
 
   def handle_in("kanban:claim", %{"payload" => %{"task_id" => task_id}}, socket) do
-    with {:ok, _task} <- Hub.Kanban.get_task(task_id),
+    with {:ok, original_task} <- Hub.Kanban.get_task(task_id),
          {:ok, _updated_task} <- Hub.Kanban.update_task(task_id, %{"assigned_to" => socket.assigns.agent_id}),
          {:ok, task} <- Hub.Kanban.move_task(task_id, "in_progress", socket.assigns.agent_id, "claimed") do
       broadcast!(socket, "kanban:task_claimed", %{
@@ -2293,6 +2485,22 @@ defmodule Hub.FleetChannel do
           "claimed_by" => socket.assigns.agent_id
         }
       })
+
+      # Notify the task creator that it was claimed
+      if original_task.created_by && original_task.created_by != socket.assigns.agent_id do
+        Task.start(fn ->
+          Hub.Messaging.Notifications.notify(
+            socket.assigns.fleet_id,
+            original_task.created_by,
+            :task_assigned,
+            %{
+              "task_id" => task_id,
+              "title" => task.title,
+              "claimed_by" => socket.assigns.agent_id
+            }
+          )
+        end)
+      end
 
       {:reply, {:ok, %{
         "type" => "kanban",

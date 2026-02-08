@@ -116,6 +116,21 @@ defmodule Hub.Messaging.Escalation do
         # Route to handler(s)
         notify_handlers(escalation)
 
+        # Send notifications to handlers
+        Task.start(fn ->
+          handler_ids = find_handler_ids(escalation)
+
+          Enum.each(handler_ids, fn handler_id ->
+            Hub.Messaging.Notifications.notify(fleet_id, handler_id, :escalation_assigned, %{
+              "escalation_id" => esc_id,
+              "from" => from_agent_id,
+              "subject" => escalation.subject,
+              "priority" => escalation.priority,
+              "target_role" => target_role
+            })
+          end)
+        end)
+
         {:ok, escalation}
 
       {:error, reason} ->
@@ -205,6 +220,16 @@ defmodule Hub.Messaging.Escalation do
 
       # Notify the originator
       notify_agent(esc.fleet_id, esc.from_agent, {:escalation_handled, to_map(updated)})
+
+      # Send notification to originator about resolution
+      Task.start(fn ->
+        Hub.Messaging.Notifications.notify(esc.fleet_id, esc.from_agent, :escalation_resolved, %{
+          "escalation_id" => escalation_id,
+          "handler" => handler_agent_id,
+          "subject" => esc.subject,
+          "status" => "handled"
+        })
+      end)
 
       :ok
     end

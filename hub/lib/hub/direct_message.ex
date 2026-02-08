@@ -26,7 +26,8 @@ defmodule Hub.DirectMessage do
   alias Hub.Auth
 
   @pubsub Hub.PubSub
-  @queue_ttl_seconds 300  # 5 minutes
+  @queue_ttl_seconds 300  # 5 minutes — standard messages
+  @queue_ttl_high_priority 86_400  # 24 hours — high/critical priority messages
 
   # ── Send a direct message ──────────────────────────────────
 
@@ -81,6 +82,17 @@ defmodule Hub.DirectMessage do
         # 5. Async persist to EventBus
         persist_to_event_bus(fleet_id, envelope)
 
+        # 6. Send notification to target agent
+        Task.start(fn ->
+          Hub.Messaging.Notifications.notify(fleet_id, to_agent_id, :dm_received, %{
+            "from" => from_agent_id,
+            "from_name" => from_name,
+            "message_id" => message_id,
+            "preview" => truncate_preview(message),
+            "timestamp" => now
+          })
+        end)
+
         {:ok, %{message_id: message_id, status: status}}
     end
   end
@@ -89,6 +101,7 @@ defmodule Hub.DirectMessage do
 
   @doc """
   Queue a message for offline delivery in the Rust store.
+  Priority "high" or "critical" messages get a 24h TTL instead of 5min.
   """
   def queue_message(fleet_id, target_agent_id, message_id, envelope) do
     queue_key = "dmq:#{fleet_id}:#{target_agent_id}:#{message_id}"
@@ -99,6 +112,34 @@ defmodule Hub.DirectMessage do
       {:error, reason} ->
         Logger.warning("[DirectMessage] Failed to queue message: #{inspect(reason)}")
         {:error, reason}
+    end
+  end
+
+  @doc """
+  List all queued (non-expired) messages for an agent without delivering them.
+  Useful for agents to check their queue explicitly.
+  """
+  @spec list_queued(String.t(), String.t()) :: [map()]
+  def list_queued(fleet_id, agent_id) do
+    prefix = "dmq:#{fleet_id}:#{agent_id}:"
+
+    case StorePort.list_documents() do
+      {:ok, ids} ->
+        ids
+        |> Enum.filter(&String.starts_with?(&1, prefix))
+        |> Enum.reduce([], fn queue_key, acc ->
+          case fetch_queued_message(queue_key) do
+            {:ok, envelope} ->
+              if message_expired?(envelope), do: acc, else: [envelope | acc]
+
+            :not_found ->
+              acc
+          end
+        end)
+        |> Enum.sort_by(& &1["timestamp"])
+
+      {:error, _} ->
+        []
     end
   end
 
@@ -161,32 +202,46 @@ defmodule Hub.DirectMessage do
   @spec history(String.t(), String.t(), String.t(), keyword()) ::
           {:ok, [map()]} | {:error, term()}
   def history(fleet_id, agent_a, agent_b, opts \\ []) do
-    bus_topic = "ringforge.#{fleet_id}.direct"
     limit = Keyword.get(opts, :limit, 50)
 
-    case Hub.EventBus.replay(bus_topic, limit: limit * 10) do
-      {:ok, events} ->
-        # Filter to conversation between the two agents
-        conversation =
-          events
-          |> Enum.filter(fn event ->
-            from_id = get_in(event, ["from", "agent_id"])
-            to_id = event["to"]
+    # Try StorePort first (persistent)
+    pair = Enum.sort([agent_a, agent_b]) |> Enum.join(":")
+    conv_key = "conv:#{fleet_id}:#{pair}"
 
-            (from_id == agent_a and to_id == agent_b) or
-              (from_id == agent_b and to_id == agent_a)
-          end)
-          |> Enum.take(-limit)
+    case StorePort.get_document(conv_key) do
+      {:ok, data} ->
+        case Jason.decode(data) do
+          {:ok, messages} when is_list(messages) ->
+            {:ok, Enum.take(messages, -limit)}
+          _ ->
+            {:ok, []}
+        end
 
-        {:ok, conversation}
+      _ ->
+        # Fallback to EventBus (volatile ETS)
+        bus_topic = "ringforge.#{fleet_id}.direct"
+        case Hub.EventBus.replay(bus_topic, limit: limit * 10) do
+          {:ok, events} ->
+            conversation =
+              events
+              |> Enum.filter(fn event ->
+                from_id = get_in(event, ["from", "agent_id"])
+                to_id = event["to"]
+                (from_id == agent_a and to_id == agent_b) or
+                  (from_id == agent_b and to_id == agent_a)
+              end)
+              |> Enum.take(-limit)
+            {:ok, conversation}
 
-      {:error, reason} ->
-        {:error, reason}
+          {:error, reason} ->
+            {:error, reason}
+        end
     end
   end
 
   # ── Private Helpers ────────────────────────────────────────
 
+  defp validate_target(_fleet_id, "dashboard"), do: :ok
   defp validate_target(fleet_id, to_agent_id) do
     case Auth.find_agent(to_agent_id) do
       {:ok, agent} ->
@@ -265,7 +320,8 @@ defmodule Hub.DirectMessage do
         case DateTime.from_iso8601(ts_string) do
           {:ok, ts, _offset} ->
             age = DateTime.diff(DateTime.utc_now(), ts, :second)
-            age > @queue_ttl_seconds
+            ttl = ttl_for_envelope(envelope)
+            age > ttl
 
           _ ->
             true
@@ -273,17 +329,70 @@ defmodule Hub.DirectMessage do
     end
   end
 
+  # High/critical priority messages get extended TTL (24h)
+  defp ttl_for_envelope(envelope) do
+    priority = get_in(envelope, ["message", "priority"])
+
+    if priority in ["high", "critical"] do
+      @queue_ttl_high_priority
+    else
+      @queue_ttl_seconds
+    end
+  end
+
   defp persist_to_event_bus(fleet_id, envelope) do
     bus_topic = "ringforge.#{fleet_id}.direct"
 
     Task.start(fn ->
+      # 1. EventBus (ETS — fast but volatile)
       case Hub.EventBus.publish(bus_topic, envelope) do
         :ok -> :ok
         {:error, reason} ->
           Logger.warning("[DirectMessage] EventBus publish failed: #{inspect(reason)}")
       end
+
+      # 2. StorePort (Rust store — persistent across restarts)
+      persist_to_store(fleet_id, envelope)
     end)
   end
+
+  defp persist_to_store(fleet_id, envelope) do
+    from_id = get_in(envelope, ["from", "agent_id"]) || "unknown"
+    to_id = envelope["to"] || "unknown"
+    # Canonical conversation key: sorted pair
+    pair = Enum.sort([from_id, to_id]) |> Enum.join(":")
+    conv_key = "conv:#{fleet_id}:#{pair}"
+
+    existing = case StorePort.get_document(conv_key) do
+      {:ok, data} ->
+        case Jason.decode(data) do
+          {:ok, list} when is_list(list) -> list
+          _ -> []
+        end
+      _ -> []
+    end
+
+    # Append and keep last 200 messages per conversation
+    updated = (existing ++ [envelope]) |> Enum.take(-200)
+    StorePort.put_document(conv_key, Jason.encode!(updated))
+  rescue
+    _ -> :ok
+  end
+
+  defp truncate_preview(message) when is_map(message) do
+    body = Map.get(message, "body") || Map.get(message, :body) || ""
+    truncate_preview(body)
+  end
+
+  defp truncate_preview(text) when is_binary(text) do
+    if String.length(text) > 80 do
+      String.slice(text, 0, 80) <> "…"
+    else
+      text
+    end
+  end
+
+  defp truncate_preview(_), do: ""
 
   defp gen_uuid do
     <<a::32, b::16, c::16, d::16, e::48>> = :crypto.strong_rand_bytes(16)

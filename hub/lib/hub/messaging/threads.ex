@@ -170,6 +170,20 @@ defmodule Hub.Messaging.Threads do
             {:thread_message, message}
           )
 
+          # Notify all other thread participants
+          Task.start(fn ->
+            (thread.participant_ids -- [agent_id])
+            |> Enum.each(fn participant_id ->
+              Hub.Messaging.Notifications.notify(thread.fleet_id, participant_id, :thread_reply, %{
+                "thread_id" => thread_id,
+                "subject" => thread.subject,
+                "from" => agent_id,
+                "preview" => String.slice(message["body"] || "", 0, 80),
+                "timestamp" => timestamp
+              })
+            end)
+          end)
+
           {:ok, message}
 
         {:error, reason} ->

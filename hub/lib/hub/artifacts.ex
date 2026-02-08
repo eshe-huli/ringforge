@@ -365,6 +365,19 @@ defmodule Hub.Artifacts do
             maybe_complete_task(updated.task_id)
           end
 
+          # Notify artifact creator about the review result
+          if updated.created_by && updated.created_by != reviewer_agent_id do
+            Task.start(fn ->
+              Hub.Messaging.Notifications.notify(updated.fleet_id, updated.created_by, :artifact_reviewed, %{
+                "artifact_id" => artifact_id,
+                "reviewer" => reviewer_agent_id,
+                "status" => status,
+                "notes" => notes,
+                "filename" => updated.filename
+              })
+            end)
+          end
+
           {:ok, updated}
 
         {:error, changeset} ->

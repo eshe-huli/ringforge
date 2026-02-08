@@ -160,12 +160,21 @@ defmodule Hub.Live.DashboardLive do
           },
           role_form_mode: :create,
           role_form_id: nil,
-          role_assign_agent_id: nil
+          role_assign_agent_id: nil,
+          # Notifications
+          unread_notifications: 0,
+          show_notifications: false,
+          notifications: [],
+          # Messaging enhancements
+          typing_agent: nil,
+          typing_timer: nil
         )
 
         if connected?(socket) do
           Hub.Events.subscribe()
           Phoenix.PubSub.subscribe(Hub.PubSub, "fleet:#{fleet_id}")
+          # Subscribe to messages addressed to "dashboard" so we get agent replies
+          Phoenix.PubSub.subscribe(Hub.PubSub, "fleet:#{fleet_id}:agent:dashboard")
           Process.send_after(self(), :refresh_quota, 1_000)
           Process.send_after(self(), :clear_toast, 4_000)
         end
@@ -581,6 +590,33 @@ defmodule Hub.Live.DashboardLive do
       {:error, reason} ->
         {:noreply, assign(socket, toast: {:error, "Escalation failed: #{reason}"})}
     end
+  end
+
+  # ── Notification Events ──────────────────────────────────────
+
+  def handle_event("toggle_notifications", _, socket) do
+    show = !socket.assigns.show_notifications
+
+    socket =
+      if show do
+        notifications = Hub.Messaging.Notifications.list(socket.assigns.fleet_id, "dashboard", limit: 20)
+        unread = Hub.Messaging.Notifications.unread_count(socket.assigns.fleet_id, "dashboard")
+        assign(socket, show_notifications: true, notifications: notifications, unread_notifications: unread)
+      else
+        assign(socket, show_notifications: false)
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("close_notifications", _, socket) do
+    {:noreply, assign(socket, show_notifications: false)}
+  end
+
+  def handle_event("mark_all_notifications_read", _, socket) do
+    Hub.Messaging.Notifications.mark_all_read(socket.assigns.fleet_id, "dashboard")
+    notifications = Enum.map(socket.assigns.notifications, &Map.put(&1, "read", true))
+    {:noreply, assign(socket, notifications: notifications, unread_notifications: 0)}
   end
 
   # ── Agent Enhancement Events ────────────────────────────────
@@ -2044,6 +2080,30 @@ defmodule Hub.Live.DashboardLive do
 
   def handle_info(:clear_toast, socket), do: {:noreply, assign(socket, toast: nil)}
 
+  # ── Incoming DM from agent (reply to dashboard) ──────────────
+  def handle_info({:direct_message, envelope}, socket) do
+    from_agent = get_in(envelope, ["from", "agent_id"])
+
+    # If we're currently chatting with this agent, append message in real-time
+    if socket.assigns.current_view == "messaging" && socket.assigns.msg_to == from_agent do
+      messages = socket.assigns.messages ++ [envelope]
+      {:noreply, assign(socket, messages: messages)}
+    else
+      # Not viewing this conversation — show a toast notification
+      from_name = get_in(envelope, ["from", "name"]) || from_agent
+      body_preview = get_in(envelope, ["message", "text"]) || get_in(envelope, ["message", "body"]) || ""
+      preview = String.slice(body_preview, 0, 60)
+      Process.send_after(self(), :clear_toast, 5_000)
+      {:noreply, assign(socket, toast: {:info, "💬 #{from_name}: #{preview}"})}
+    end
+  end
+
+  # Delivery receipt — agent confirmed they received our message
+  def handle_info({:message_receipt, receipt}, socket) do
+    # Could update message status in UI; for now just log
+    {:noreply, socket}
+  end
+
   def handle_info(:wizard_check_agent, socket) do
     if socket.assigns[:wizard_open] && socket.assigns[:wizard_waiting] && is_nil(socket.assigns[:wizard_connected_agent]) do
       current_count = map_size(socket.assigns.agents)
@@ -2430,6 +2490,57 @@ defmodule Hub.Live.DashboardLive do
             </div>
             <.separator orientation="vertical" class="h-3" />
             <span><%= Components.fmt_num(@msg_used) %> msgs</span>
+          </div>
+          <%!-- Notifications bell --%>
+          <div class="relative">
+            <button phx-click="toggle_notifications" class="relative p-1.5 rounded-lg hover:bg-zinc-800 transition-colors" title="Notifications">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-zinc-400 hover:text-zinc-200">
+                <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+              </svg>
+              <%= if @unread_notifications > 0 do %>
+                <span class="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-red-500 text-[9px] text-white flex items-center justify-center font-bold leading-none">
+                  <%= if @unread_notifications > 9, do: "9+", else: @unread_notifications %>
+                </span>
+              <% end %>
+            </button>
+            <%!-- Notification dropdown --%>
+            <%= if @show_notifications do %>
+              <div class="absolute right-0 top-10 w-80 max-h-96 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl z-50 overflow-hidden" phx-click-away="close_notifications">
+                <div class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
+                  <span class="text-sm font-semibold text-zinc-200">Notifications</span>
+                  <%= if @unread_notifications > 0 do %>
+                    <button phx-click="mark_all_notifications_read" class="text-[10px] px-2 py-1 rounded text-amber-400 hover:bg-amber-500/15 transition-colors">
+                      Mark all read
+                    </button>
+                  <% end %>
+                </div>
+                <div class="overflow-y-auto max-h-72">
+                  <%= if @notifications == [] do %>
+                    <div class="px-4 py-8 text-center">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-zinc-700 mx-auto mb-2">
+                        <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+                      </svg>
+                      <p class="text-xs text-zinc-600">No notifications yet</p>
+                    </div>
+                  <% else %>
+                    <%= for ntf <- @notifications do %>
+                      <div class={"px-4 py-3 border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors " <> if(ntf["read"] == false, do: "bg-amber-500/5", else: "")}>
+                        <div class="flex items-start gap-2.5">
+                          <div class={"w-2 h-2 rounded-full mt-1.5 shrink-0 " <> if(ntf["read"] == false, do: "bg-amber-400", else: "bg-zinc-700")}></div>
+                          <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 mb-0.5">
+                              <span class="text-[10px] font-medium text-amber-400/80 uppercase"><%= notification_type_label(ntf["type"]) %></span>
+                            </div>
+                            <p class="text-xs text-zinc-300 truncate"><%= notification_preview(ntf) %></p>
+                            <span class="text-[10px] text-zinc-600"><%= relative_time(ntf["timestamp"]) %></span>
+                          </div>
+                        </div>
+                      </div>
+                    <% end %>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
           </div>
           <%!-- Live indicator --%>
           <.badge variant="outline" class="border-green-500/20 bg-green-500/5 text-green-400 text-[10px] font-medium">
@@ -5304,6 +5415,17 @@ defmodule Hub.Live.DashboardLive do
                         <Components.message_bubble msg={msg} />
                       <% end %>
                     <% end %>
+                    <%!-- Typing indicator --%>
+                    <%= if @typing_agent do %>
+                      <div class="flex items-center gap-2 px-1 py-1.5 animate-fade-in">
+                        <div class="flex gap-0.5">
+                          <span class="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" style="animation-delay: 0ms"></span>
+                          <span class="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" style="animation-delay: 150ms"></span>
+                          <span class="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" style="animation-delay: 300ms"></span>
+                        </div>
+                        <span class="text-[10px] text-zinc-500 italic"><%= @typing_agent %> is typing…</span>
+                      </div>
+                    <% end %>
                   </div>
 
                   <div class="px-4 py-3 border-t border-zinc-800 shrink-0">
@@ -5380,10 +5502,19 @@ defmodule Hub.Live.DashboardLive do
                             end}><%= thread.scope %></span>
                         </div>
                         <div class="flex items-center gap-3 text-[10px] text-zinc-500">
-                          <span><%= length(thread.participant_ids) %> participants</span>
-                          <span><%= thread.message_count %> msgs</span>
+                          <span class="flex items-center gap-0.5">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                            <%= length(thread.participant_ids) %>
+                          </span>
+                          <span class="flex items-center gap-0.5">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                            <%= thread.message_count %>
+                          </span>
                           <span class={"font-medium " <> if(thread.status == "open", do: "text-emerald-400", else: "text-zinc-600")}><%= thread.status %></span>
                         </div>
+                        <%= if thread.last_message_at do %>
+                          <div class="text-[9px] text-zinc-600 mt-0.5"><%= relative_time(thread.last_message_at) %></div>
+                        <% end %>
                         <%= if thread.task_id do %>
                           <div class="mt-1">
                             <span class="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
@@ -6714,4 +6845,45 @@ defmodule Hub.Live.DashboardLive do
 
   defp sort_arrow(current, dir, col) when current == col, do: if(dir == :asc, do: "↑", else: "↓")
   defp sort_arrow(_, _, _), do: ""
+
+  # ── Notification Helpers ──────────────────────────────────
+
+  defp relative_time(nil), do: ""
+  defp relative_time(%DateTime{} = dt) do
+    diff = DateTime.diff(DateTime.utc_now(), dt, :second)
+    cond do
+      diff < 60 -> "just now"
+      diff < 3600 -> "#{div(diff, 60)}m ago"
+      diff < 86400 -> "#{div(diff, 3600)}h ago"
+      true -> "#{div(diff, 86400)}d ago"
+    end
+  end
+  defp relative_time(ts) when is_binary(ts) do
+    case DateTime.from_iso8601(ts) do
+      {:ok, dt, _} -> relative_time(dt)
+      _ -> ""
+    end
+  end
+  defp relative_time(_), do: ""
+
+  defp notification_type_label("dm_received"), do: "Message"
+  defp notification_type_label("thread_reply"), do: "Thread"
+  defp notification_type_label("escalation_assigned"), do: "Escalation"
+  defp notification_type_label("escalation_resolved"), do: "Resolved"
+  defp notification_type_label("task_assigned"), do: "Task"
+  defp notification_type_label("artifact_review"), do: "Review"
+  defp notification_type_label("artifact_reviewed"), do: "Reviewed"
+  defp notification_type_label("announcement"), do: "Announce"
+  defp notification_type_label("role_changed"), do: "Role"
+  defp notification_type_label(type) when is_binary(type), do: String.replace(type, "_", " ") |> String.capitalize()
+  defp notification_type_label(_), do: "Notification"
+
+  defp notification_preview(%{"payload" => %{"preview" => preview}}) when is_binary(preview), do: preview
+  defp notification_preview(%{"payload" => %{"body" => body}}) when is_binary(body), do: String.slice(body, 0, 80)
+  defp notification_preview(%{"payload" => %{"subject" => subject}}) when is_binary(subject), do: subject
+  defp notification_preview(%{"payload" => %{"text" => text}}) when is_binary(text), do: String.slice(text, 0, 80)
+  defp notification_preview(%{"payload" => %{"title" => title}}) when is_binary(title), do: title
+  defp notification_preview(%{"payload" => %{"filename" => filename}}) when is_binary(filename), do: filename
+  defp notification_preview(%{"type" => type}), do: notification_type_label(type)
+  defp notification_preview(_), do: "New notification"
 end

@@ -70,6 +70,21 @@ defmodule Hub.Messaging.Announcements do
       # Broadcast based on scope
       count = broadcast_to_scope(fleet_id, scope, envelope)
 
+      # Send notifications to all agents in scope
+      Task.start(fn ->
+        target_ids = resolve_notification_targets(fleet_id, from_agent_id, scope)
+
+        Enum.each(target_ids, fn agent_id ->
+          Hub.Messaging.Notifications.notify(fleet_id, agent_id, :announcement, %{
+            "announcement_id" => announcement_id,
+            "from" => from_agent_id,
+            "scope" => scope,
+            "preview" => String.slice(envelope["body"] || "", 0, 80),
+            "priority" => envelope["priority"]
+          })
+        end)
+      end)
+
       {:ok, count}
     end
   end
@@ -220,6 +235,27 @@ defmodule Hub.Messaging.Announcements do
       _ ->
         nil
     end
+  end
+
+  # Resolve agent_ids for notification targets based on scope
+  defp resolve_notification_targets(fleet_id, from_agent_id, "fleet") do
+    from(a in Agent, where: a.fleet_id == ^fleet_id and a.agent_id != ^from_agent_id, select: a.agent_id)
+    |> Repo.all()
+  end
+
+  defp resolve_notification_targets(_fleet_id, from_agent_id, "squad:" <> squad_id) do
+    from(a in Agent, where: a.squad_id == ^squad_id and a.agent_id != ^from_agent_id, select: a.agent_id)
+    |> Repo.all()
+  end
+
+  defp resolve_notification_targets(fleet_id, from_agent_id, "role:" <> role_slug) do
+    find_agents_by_role(fleet_id, role_slug)
+    |> Enum.map(& &1.agent_id)
+    |> Enum.reject(&(&1 == from_agent_id))
+  end
+
+  defp resolve_notification_targets(fleet_id, from_agent_id, _scope) do
+    resolve_notification_targets(fleet_id, from_agent_id, "fleet")
   end
 
   defp base62_random(length) do
