@@ -3372,6 +3372,18 @@ defmodule Hub.FleetChannel do
       |> maybe_update(:framework, Map.get(join_payload, "framework"), agent.framework)
       |> maybe_update(:capabilities, Map.get(join_payload, "capabilities"), agent.capabilities)
 
+    # Sync model into metadata jsonb column
+    new_model = Map.get(join_payload, "model")
+    current_model = Map.get(agent.metadata || %{}, "model")
+
+    updates =
+      if new_model && new_model != "" && new_model != current_model do
+        current_metadata = agent.metadata || %{}
+        Map.put(updates, :metadata, Map.put(current_metadata, "model", new_model))
+      else
+        updates
+      end
+
     if map_size(updates) > 0 do
       agent
       |> Auth.Agent.changeset(updates)
@@ -3445,6 +3457,7 @@ defmodule Hub.FleetChannel do
       agent_id: socket_agent_id(agent),
       name: agent_name(agent, join_payload),
       framework: Map.get(join_payload, "framework", agent_framework(agent)),
+      model: Map.get(join_payload, "model", agent_model(agent)),
       capabilities: Map.get(join_payload, "capabilities", agent_capabilities(agent)),
       state: validated_state(Map.get(join_payload, "state", "online")),
       task: Map.get(join_payload, "task"),
@@ -3457,6 +3470,9 @@ defmodule Hub.FleetChannel do
       node_region: Hub.NodeInfo.region()
     }
   end
+
+  defp agent_model(nil), do: nil
+  defp agent_model(agent), do: Map.get(agent.metadata || %{}, "model")
 
   defp socket_agent_id(nil), do: nil
   defp socket_agent_id(agent), do: agent.agent_id
@@ -3532,6 +3548,7 @@ defmodule Hub.FleetChannel do
       "agent_id" => agent_id,
       "name" => meta[:name] || meta["name"],
       "framework" => meta[:framework] || meta["framework"],
+      "model" => meta[:model] || meta["model"],
       "capabilities" => meta[:capabilities] || meta["capabilities"] || [],
       "state" => meta[:state] || meta["state"],
       "task" => meta[:task] || meta["task"],

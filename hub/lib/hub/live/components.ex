@@ -84,6 +84,11 @@ defmodule Hub.Live.Components do
             </div>
           </div>
         </div>
+        <%= if @meta[:model] do %>
+          <div class="mb-1.5">
+            <.model_badge model={@meta[:model]} />
+          </div>
+        <% end %>
         <%= if @meta[:task] do %>
           <div class="text-xs text-zinc-400 truncate mb-1.5" title={@meta[:task]}>
             <span class="text-zinc-600">→</span> <%= @meta[:task] %>
@@ -151,6 +156,13 @@ defmodule Hub.Live.Components do
       </.table_cell>
       <.table_cell>
         <span class="text-xs text-zinc-400"><%= @meta[:framework] || "—" %></span>
+      </.table_cell>
+      <.table_cell>
+        <%= if @meta[:model] do %>
+          <.model_badge model={@meta[:model]} />
+        <% else %>
+          <span class="text-[10px] text-zinc-600">—</span>
+        <% end %>
       </.table_cell>
     </.table_row>
     """
@@ -654,6 +666,48 @@ defmodule Hub.Live.Components do
       {:memory_entries, "Memory", :brain, "purple"},
       {:fleets, "Fleets", :network, "green"}
     ]
+  end
+
+  # ═══════════════════════════════════════════════════════════
+  # AI Model Badge
+  # ═══════════════════════════════════════════════════════════
+
+  attr :model, :any, default: nil
+
+  def model_badge(assigns) do
+    {label, color} = model_display(assigns.model)
+    assigns = assign(assigns, label: label, color: color)
+
+    ~H"""
+    <span class={"inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border " <> @color}>
+      <Icons.cpu class="w-2.5 h-2.5" />
+      <%= @label %>
+    </span>
+    """
+  end
+
+  defp model_display(nil), do: {"Unknown", "bg-zinc-500/10 text-zinc-500 border-zinc-500/20"}
+  defp model_display(model) when is_binary(model) do
+    cond do
+      String.contains?(model, "claude") ->
+        {format_model(model), "bg-purple-500/10 text-purple-400 border-purple-500/20"}
+      String.contains?(model, "gpt") ->
+        {format_model(model), "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"}
+      String.contains?(model, "gemini") ->
+        {format_model(model), "bg-blue-500/10 text-blue-400 border-blue-500/20"}
+      String.contains?(model, "llama") or String.contains?(model, "qwen") or String.contains?(model, "mistral") ->
+        {format_model(model), "bg-orange-500/10 text-orange-400 border-orange-500/20"}
+      true ->
+        {format_model(model), "bg-zinc-500/10 text-zinc-400 border-zinc-500/20"}
+    end
+  end
+  defp model_display(_), do: model_display(nil)
+
+  defp format_model(m) do
+    m
+    |> String.replace(~r/^anthropic\/|^openai\//, "")
+    |> String.replace(~r/-\d{8}$/, "")
+    |> String.slice(0, 20)
   end
 
   # ═══════════════════════════════════════════════════════════

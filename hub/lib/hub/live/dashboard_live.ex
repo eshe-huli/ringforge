@@ -1958,7 +1958,8 @@ defmodule Hub.Live.DashboardLive do
       meta = %{
         name: p["name"] || agent_id, state: p["state"] || "online",
         capabilities: p["capabilities"] || [], task: p["task"],
-        framework: p["framework"], connected_at: p["connected_at"]
+        framework: p["framework"], model: p["model"],
+        connected_at: p["connected_at"]
       }
       activity = %{
         kind: "join", agent_id: agent_id, agent_name: meta.name,
@@ -2618,27 +2619,27 @@ defmodule Hub.Live.DashboardLive do
               <.card_content class="p-3">
                 <div class="flex items-center gap-2 flex-wrap text-xs">
                   <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
-                    <span>📋</span>
+                    <Icons.inbox class="w-3.5 h-3.5 inline text-zinc-400" />
                     <span>Backlog: <span class="font-medium text-zinc-200"><%= @ov_lane_counts["backlog"] || 0 %></span></span>
                   </button>
                   <span class="text-zinc-700">|</span>
                   <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
-                    <span>🟢</span>
+                    <Icons.circle_dot class="w-3.5 h-3.5 inline text-green-400" />
                     <span>Ready: <span class="font-medium text-green-400"><%= @ov_lane_counts["ready"] || 0 %></span></span>
                   </button>
                   <span class="text-zinc-700">|</span>
                   <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
-                    <span>🔵</span>
+                    <Icons.play class="w-3.5 h-3.5 inline text-blue-400" />
                     <span>Active: <span class="font-medium text-blue-400"><%= @ov_lane_counts["in_progress"] || 0 %></span></span>
                   </button>
                   <span class="text-zinc-700">|</span>
                   <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
-                    <span>🟡</span>
+                    <Icons.eye class="w-3.5 h-3.5 inline text-yellow-400" />
                     <span>Review: <span class="font-medium text-yellow-400"><%= @ov_lane_counts["review"] || 0 %></span></span>
                   </button>
                   <span class="text-zinc-700">|</span>
                   <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
-                    <span>✅</span>
+                    <Icons.check_circle class="w-3.5 h-3.5 inline text-emerald-400" />
                     <span>Done: <span class="font-medium text-emerald-400"><%= @ov_lane_counts["done"] || 0 %></span></span>
                   </button>
                 </div>
@@ -3131,7 +3132,7 @@ defmodule Hub.Live.DashboardLive do
                       <span class="text-[10px] text-zinc-500"><%= member_count %></span>
                     </div>
                     <%= if leader do %>
-                      <span class="text-[10px] text-amber-500/70">👑 <%= leader.name || leader.agent_id %></span>
+                      <span class="text-[10px] text-amber-500/70 flex items-center gap-0.5"><Icons.crown class="w-3.5 h-3.5 inline text-amber-400" /> <%= leader.name || leader.agent_id %></span>
                     <% end %>
                   </div>
                 </div>
@@ -3182,7 +3183,7 @@ defmodule Hub.Live.DashboardLive do
                   <div class="flex items-center gap-2 mt-0.5">
                     <span class="text-[10px] text-zinc-600 font-mono"><%= squad.group_id %></span>
                     <%= if leader do %>
-                      <span class="text-[10px] text-amber-400">👑 <%= leader.name || leader.agent_id %></span>
+                      <span class="text-[10px] text-amber-400 flex items-center gap-0.5"><Icons.crown class="w-3.5 h-3.5 inline text-amber-400" /> <%= leader.name || leader.agent_id %></span>
                     <% end %>
                   </div>
                 </div>
@@ -3302,7 +3303,7 @@ defmodule Hub.Live.DashboardLive do
                     <div class="flex items-center justify-between p-3 rounded-lg bg-amber-500/5 border border-amber-500/15">
                       <div class="flex items-center gap-2.5">
                         <div class="w-8 h-8 rounded-lg bg-amber-500/15 flex items-center justify-center text-sm font-bold text-amber-400">
-                          👑
+                          <Icons.crown class="w-4 h-4 text-amber-400" />
                         </div>
                         <div>
                           <div class="text-sm font-medium text-zinc-200"><%= leader.name || leader.agent_id %></div>
@@ -3346,7 +3347,7 @@ defmodule Hub.Live.DashboardLive do
                           <div class="flex items-center gap-2.5">
                             <div class={"w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-bold " <>
                               if(is_leader, do: "bg-amber-500/15 text-amber-400", else: "bg-zinc-800 text-zinc-400")}>
-                              <%= if is_leader, do: "👑", else: String.first(agent.name || agent.agent_id) |> String.upcase() %>
+                              <%= if is_leader do %><Icons.crown class="w-3.5 h-3.5 text-amber-400" /><% else %><%= String.first(agent.name || agent.agent_id) |> String.upcase() %><% end %>
                             </div>
                             <div>
                               <button
@@ -3364,6 +3365,9 @@ defmodule Hub.Live.DashboardLive do
                                 <% end %>
                                 <%= if agent.context_tier do %>
                                   <span class={"text-[9px] px-1.5 py-0 rounded border " <> tier_badge_class(agent.context_tier |> to_string() |> String.to_integer())}>T<%= agent.context_tier %></span>
+                                <% end %>
+                                <%= if Map.get(agent.metadata || %{}, "model") do %>
+                                  <Components.model_badge model={Map.get(agent.metadata, "model")} />
                                 <% end %>
                               </div>
                             </div>
@@ -3627,7 +3631,7 @@ defmodule Hub.Live.DashboardLive do
                         <div class="text-sm font-medium text-zinc-200 flex items-center gap-1.5">
                           <%= role.name %>
                           <%= if role.is_predefined do %>
-                            <span title="Predefined (read-only)" class="text-xs">🔒</span>
+                            <span title="Predefined (read-only)"><Icons.lock class="w-3 h-3 inline text-zinc-500" /></span>
                           <% end %>
                         </div>
                         <div class="text-[11px] text-zinc-500 font-mono"><%= role.slug %></div>
@@ -3685,7 +3689,7 @@ defmodule Hub.Live.DashboardLive do
                   <div class="flex items-center gap-2">
                     <h3 class="text-lg font-semibold text-zinc-100"><%= @selected_role.name %></h3>
                     <%= if @selected_role.is_predefined do %>
-                      <.badge variant="outline" class="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20">Predefined 🔒</.badge>
+                      <.badge variant="outline" class="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20">Predefined <Icons.lock class="w-3 h-3 inline text-zinc-500" /></.badge>
                     <% else %>
                       <.badge variant="outline" class="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/20">Custom</.badge>
                     <% end %>
@@ -4064,6 +4068,7 @@ defmodule Hub.Live.DashboardLive do
                       Framework <%= sort_arrow(@sort_by, @sort_dir, :framework) %>
                     </button>
                   </.table_head>
+                  <.table_head><span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Model</span></.table_head>
                 </.table_row>
               </.table_header>
               <.table_body>
@@ -4117,6 +4122,13 @@ defmodule Hub.Live.DashboardLive do
                     <.table_cell>
                       <span class="text-xs text-zinc-400"><%= meta[:framework] || "—" %></span>
                     </.table_cell>
+                    <.table_cell>
+                      <%= if meta[:model] do %>
+                        <Components.model_badge model={meta[:model]} />
+                      <% else %>
+                        <span class="text-[10px] text-zinc-600">—</span>
+                      <% end %>
+                    </.table_cell>
                   </.table_row>
                 <% end %>
               </.table_body>
@@ -4160,6 +4172,12 @@ defmodule Hub.Live.DashboardLive do
                   <.separator class="my-3" />
 
                   <div class="space-y-2 text-xs">
+                    <%= if dm[:model] do %>
+                      <div class="flex justify-between py-1 border-b border-zinc-700/30">
+                        <span class="text-zinc-500">Model</span>
+                        <Components.model_badge model={dm[:model]} />
+                      </div>
+                    <% end %>
                     <%= for {label, val} <- [{"ID", @selected_agent}, {"Framework", dm[:framework] || "—"}, {"Connected", Components.format_connected_at(dm[:connected_at])}] do %>
                       <div class="flex justify-between py-1 border-b border-zinc-700/30">
                         <span class="text-zinc-500"><%= label %></span>
@@ -4447,44 +4465,44 @@ defmodule Hub.Live.DashboardLive do
         <%!-- Stats bar --%>
         <div class="flex items-center gap-3 text-xs flex-wrap">
           <div class="flex items-center gap-1.5 text-zinc-400">
-            <span class="text-zinc-500">📊</span>
+            <Icons.bar_chart class="w-3.5 h-3.5 inline text-zinc-400" />
             <span>Total: <span class="text-zinc-200 font-medium"><%= @kb_total %></span></span>
           </div>
           <span class="text-zinc-700">|</span>
           <div class="flex items-center gap-1.5 text-zinc-400">
-            <span>📋</span>
+            <Icons.inbox class="w-3.5 h-3.5 inline text-zinc-400" />
             <span>Backlog: <span class="text-zinc-200 font-medium"><%= @lane_counts["backlog"] || 0 %></span></span>
           </div>
           <span class="text-zinc-700">|</span>
           <div class="flex items-center gap-1.5 text-zinc-400">
-            <span>🟢</span>
+            <Icons.circle_dot class="w-3.5 h-3.5 inline text-green-400" />
             <span>Ready: <span class="text-green-400 font-medium"><%= @lane_counts["ready"] || 0 %></span></span>
           </div>
           <span class="text-zinc-700">|</span>
           <div class="flex items-center gap-1.5 text-zinc-400">
-            <span>🔵</span>
+            <Icons.play class="w-3.5 h-3.5 inline text-blue-400" />
             <span>Active: <span class="text-blue-400 font-medium"><%= @lane_counts["in_progress"] || 0 %></span></span>
           </div>
           <span class="text-zinc-700">|</span>
           <div class="flex items-center gap-1.5 text-zinc-400">
-            <span>🟡</span>
+            <Icons.eye class="w-3.5 h-3.5 inline text-yellow-400" />
             <span>Review: <span class="text-yellow-400 font-medium"><%= @lane_counts["review"] || 0 %></span></span>
           </div>
           <span class="text-zinc-700">|</span>
           <div class="flex items-center gap-1.5 text-zinc-400">
-            <span>✅</span>
+            <Icons.check_circle class="w-3.5 h-3.5 inline text-emerald-400" />
             <span>Done: <span class="text-emerald-400 font-medium"><%= @lane_counts["done"] || 0 %></span></span>
           </div>
           <%= if @kb_blocked > 0 do %>
             <span class="text-zinc-700">|</span>
             <div class="flex items-center gap-1.5 text-red-400">
-              <span>🚫</span>
+              <Icons.ban class="w-3.5 h-3.5 inline text-red-400" />
               <span>Blocked: <span class="font-medium"><%= @kb_blocked %></span></span>
             </div>
           <% end %>
           <span class="text-zinc-700">|</span>
           <div class="flex items-center gap-1.5 text-zinc-400">
-            <span>⚡</span>
+            <Icons.zap class="w-3.5 h-3.5 inline text-amber-400" />
             <span>Velocity: <span class="text-amber-400 font-medium"><%= @velocity_24h %>/day</span></span>
           </div>
           <%= if @avg_cycle do %>
@@ -4516,10 +4534,10 @@ defmodule Hub.Live.DashboardLive do
               class="h-8 px-2.5 text-xs bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-400 focus:border-amber-500/50 focus:outline-none"
             >
               <option value="" selected={is_nil(@kanban_filters.priority)}>All Priorities</option>
-              <option value="critical" selected={@kanban_filters.priority == "critical"}>🔴 Critical</option>
-              <option value="high" selected={@kanban_filters.priority == "high"}>🟠 High</option>
-              <option value="medium" selected={@kanban_filters.priority == "medium"}>🟡 Medium</option>
-              <option value="low" selected={@kanban_filters.priority == "low"}>⚪ Low</option>
+              <option value="critical" selected={@kanban_filters.priority == "critical"}>⬤ Critical</option>
+              <option value="high" selected={@kanban_filters.priority == "high"}>▲ High</option>
+              <option value="medium" selected={@kanban_filters.priority == "medium"}>● Medium</option>
+              <option value="low" selected={@kanban_filters.priority == "low"}>○ Low</option>
             </select>
             <select
               phx-change="kanban_filter"
@@ -4589,7 +4607,7 @@ defmodule Hub.Live.DashboardLive do
                               <%= effort_short(task.effort) %>
                             </span>
                           <% end %>
-                          <span class="text-sm"><%= priority_emoji(task.priority) %></span>
+                          <span class="text-sm"><%= priority_icon(task.priority) %></span>
                         </div>
                       </div>
 
@@ -4621,7 +4639,7 @@ defmodule Hub.Live.DashboardLive do
                           <% end %>
                         </div>
                         <%= if (task.blocked_by || []) != [] do %>
-                          <span class="text-[10px] text-red-400" title="Blocked">🚫</span>
+                          <span class="text-[10px] text-red-400" title="Blocked"><Icons.ban class="w-3.5 h-3.5 inline text-red-400" /></span>
                         <% end %>
                       </div>
                     </div>
@@ -4644,7 +4662,7 @@ defmodule Hub.Live.DashboardLive do
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-mono text-zinc-500"><%= task.task_id %></span>
-                  <span class="text-lg"><%= priority_emoji(task.priority) %></span>
+                  <span class="text-lg"><%= priority_icon(task.priority) %></span>
                   <.badge variant="outline" class={"text-[10px] " <> lane_badge_style(task.lane)}>
                     <%= String.replace(task.lane, "_", " ") |> String.upcase() %>
                   </.badge>
@@ -4675,7 +4693,7 @@ defmodule Hub.Live.DashboardLive do
                       phx-value-lane={target_lane}
                       class={"h-7 text-[11px] " <> lane_move_btn_style(target_lane)}
                     >
-                      <%= lane_emoji(target_lane) %> <%= String.replace(target_lane, "_", " ") |> String.capitalize() %>
+                      <%= lane_icon(target_lane) %> <%= String.replace(target_lane, "_", " ") |> String.capitalize() %>
                     </.button>
                   <% end %>
                 </div>
@@ -4693,7 +4711,7 @@ defmodule Hub.Live.DashboardLive do
               <div class="grid grid-cols-2 gap-3">
                 <div class="bg-zinc-800/50 rounded-lg p-3">
                   <div class="text-[10px] text-zinc-500 uppercase mb-1">Priority</div>
-                  <div class="text-sm text-zinc-200"><%= priority_emoji(task.priority) %> <%= String.capitalize(task.priority) %></div>
+                  <div class="text-sm text-zinc-200 flex items-center gap-1"><%= priority_icon(task.priority) %> <%= String.capitalize(task.priority) %></div>
                 </div>
                 <div class="bg-zinc-800/50 rounded-lg p-3">
                   <div class="text-[10px] text-zinc-500 uppercase mb-1">Effort</div>
@@ -4760,7 +4778,7 @@ defmodule Hub.Live.DashboardLive do
               <%!-- Artifacts --%>
               <%= if @selected_task_artifacts != [] do %>
                 <div>
-                  <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 block">📁 Artifacts</label>
+                  <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 flex items-center gap-1"><Icons.folder class="w-3.5 h-3.5 inline text-amber-400" /> Artifacts</label>
                   <div class="space-y-1.5">
                     <%= for artifact <- @selected_task_artifacts do %>
                       <div class="flex items-center gap-2 py-1.5 px-2 rounded-md bg-zinc-800/30">
@@ -4771,11 +4789,11 @@ defmodule Hub.Live.DashboardLive do
                             _ -> "text-yellow-400 text-xs"
                           end
                         }>
-                          <%= case artifact.status do
-                            "approved" -> "✅"
-                            "rejected" -> "❌"
-                            _ -> "🟡"
-                          end %>
+                          <%= case artifact.status do %>
+                            <% "approved" -> %><Icons.check_circle class="w-3.5 h-3.5 inline text-emerald-400" />
+                            <% "rejected" -> %><Icons.x_circle class="w-3.5 h-3.5 inline text-red-400" />
+                            <% _ -> %><Icons.eye class="w-3.5 h-3.5 inline text-yellow-400" />
+                          <% end %>
                         </span>
                         <div class="flex-1 min-w-0">
                           <div class="flex items-center gap-1.5">
@@ -4810,7 +4828,7 @@ defmodule Hub.Live.DashboardLive do
               <%!-- Linked Threads --%>
               <%= if @selected_task_threads != [] do %>
                 <div>
-                  <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 block">💬 Discussion (<%= Enum.reduce(@selected_task_threads, 0, fn t, acc -> acc + (t.message_count || 0) end) %> messages)</label>
+                  <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 flex items-center gap-1"><Icons.message_square class="w-3.5 h-3.5 inline text-blue-400" /> Discussion (<%= Enum.reduce(@selected_task_threads, 0, fn t, acc -> acc + (t.message_count || 0) end) %> messages)</label>
                   <div class="space-y-1.5">
                     <%= for thread <- @selected_task_threads do %>
                       <div class="flex items-center gap-2 py-1.5 px-2 rounded-md bg-zinc-800/30 cursor-pointer hover:bg-zinc-800/50 transition-colors"
@@ -4973,10 +4991,10 @@ defmodule Hub.Live.DashboardLive do
                     name="value"
                     class="w-full h-9 px-3 text-sm bg-zinc-950 border border-zinc-700 rounded-lg text-zinc-100 focus:border-amber-500/50 focus:outline-none"
                   >
-                    <option value="critical" selected={@kanban_form.priority == "critical"}>🔴 Critical</option>
-                    <option value="high" selected={@kanban_form.priority == "high"}>🟠 High</option>
-                    <option value="medium" selected={@kanban_form.priority == "medium"}>🟡 Medium</option>
-                    <option value="low" selected={@kanban_form.priority == "low"}>⚪ Low</option>
+                    <option value="critical" selected={@kanban_form.priority == "critical"}>⬤ Critical</option>
+                    <option value="high" selected={@kanban_form.priority == "high"}>▲ High</option>
+                    <option value="medium" selected={@kanban_form.priority == "medium"}>● Medium</option>
+                    <option value="low" selected={@kanban_form.priority == "low"}>○ Low</option>
                   </select>
                 </div>
                 <div>
@@ -5083,19 +5101,19 @@ defmodule Hub.Live.DashboardLive do
 
   # ── Kanban helpers ──
 
-  defp priority_emoji("critical"), do: "🔴"
-  defp priority_emoji("high"), do: "🟠"
-  defp priority_emoji("medium"), do: "🟡"
-  defp priority_emoji("low"), do: "⚪"
-  defp priority_emoji(_), do: "⬜"
+  defp priority_icon("critical"), do: Icons.alert_triangle(%{class: "w-3 h-3 inline text-red-400"})
+  defp priority_icon("high"), do: Icons.alert_triangle(%{class: "w-3 h-3 inline text-orange-400"})
+  defp priority_icon("medium"), do: Icons.minus(%{class: "w-3 h-3 inline text-yellow-400"})
+  defp priority_icon("low"), do: Icons.minus(%{class: "w-3 h-3 inline text-zinc-500"})
+  defp priority_icon(_), do: Icons.minus(%{class: "w-3 h-3 inline text-zinc-600"})
 
-  defp lane_emoji("backlog"), do: "📋"
-  defp lane_emoji("ready"), do: "🟢"
-  defp lane_emoji("in_progress"), do: "🔵"
-  defp lane_emoji("review"), do: "🟡"
-  defp lane_emoji("done"), do: "✅"
-  defp lane_emoji("cancelled"), do: "🚫"
-  defp lane_emoji(_), do: "⬜"
+  defp lane_icon("backlog"), do: Icons.inbox(%{class: "w-3.5 h-3.5 inline text-zinc-400"})
+  defp lane_icon("ready"), do: Icons.circle_dot(%{class: "w-3.5 h-3.5 inline text-green-400"})
+  defp lane_icon("in_progress"), do: Icons.play(%{class: "w-3.5 h-3.5 inline text-blue-400"})
+  defp lane_icon("review"), do: Icons.eye(%{class: "w-3.5 h-3.5 inline text-yellow-400"})
+  defp lane_icon("done"), do: Icons.check_circle(%{class: "w-3.5 h-3.5 inline text-emerald-400"})
+  defp lane_icon("cancelled"), do: Icons.ban(%{class: "w-3.5 h-3.5 inline text-red-400"})
+  defp lane_icon(_), do: Icons.minus(%{class: "w-3.5 h-3.5 inline text-zinc-600"})
 
   defp effort_short("trivial"), do: "XS"
   defp effort_short("small"), do: "S"
@@ -6118,6 +6136,7 @@ defmodule Hub.Live.DashboardLive do
       capabilities: m[:capabilities] || m["capabilities"] || [],
       task: m[:task] || m["task"],
       framework: m[:framework] || m["framework"],
+      model: m[:model] || m["model"],
       connected_at: m[:connected_at] || m["connected_at"]
     }
   end
