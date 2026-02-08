@@ -111,42 +111,131 @@ defmodule Hub.Layouts do
             color: hsl(var(--foreground));
           }
 
-          /* ── Light mode overrides for hardcoded dark classes ── */
+          /* ══ LIGHT MODE — comprehensive overrides for hardcoded dark classes ══ */
+
+          /* Backgrounds */
           :root:not(.dark) .bg-zinc-900 { background-color: #ffffff !important; }
           :root:not(.dark) .bg-zinc-950 { background-color: #f8fafc !important; }
+          :root:not(.dark) .bg-zinc-900\/95 { background-color: rgba(255,255,255,0.97) !important; }
+          :root:not(.dark) .bg-zinc-900\/50 { background-color: rgba(255,255,255,0.7) !important; }
           :root:not(.dark) .bg-zinc-800 { background-color: #f1f5f9 !important; }
           :root:not(.dark) .bg-zinc-800\/30 { background-color: rgba(241,245,249,0.5) !important; }
           :root:not(.dark) .bg-zinc-800\/50 { background-color: rgba(241,245,249,0.7) !important; }
-          :root:not(.dark) .hover\:bg-zinc-800\/50:hover { background-color: rgba(241,245,249,0.8) !important; }
+          :root:not(.dark) .bg-zinc-800\/40 { background-color: rgba(241,245,249,0.6) !important; }
+          :root:not(.dark) .bg-zinc-800\/70 { background-color: rgba(241,245,249,0.8) !important; }
+          :root:not(.dark) .bg-\[\#09090b\] { background-color: #f8fafc !important; }
+          :root:not(.dark) .bg-\[\#111119\] { background-color: #ffffff !important; }
+          :root:not(.dark) .hover\:bg-zinc-800\/50:hover { background-color: rgba(241,245,249,0.9) !important; }
           :root:not(.dark) .hover\:bg-zinc-800:hover { background-color: #e2e8f0 !important; }
+          :root:not(.dark) .hover\:bg-zinc-900:hover { background-color: #f1f5f9 !important; }
+
+          /* Borders */
           :root:not(.dark) .border-zinc-800 { border-color: #e2e8f0 !important; }
           :root:not(.dark) .border-zinc-800\/50 { border-color: rgba(226,232,240,0.7) !important; }
+          :root:not(.dark) .border-zinc-800\/30 { border-color: rgba(226,232,240,0.5) !important; }
           :root:not(.dark) .border-zinc-700 { border-color: #cbd5e1 !important; }
+          :root:not(.dark) .border-zinc-700\/50 { border-color: rgba(203,213,225,0.6) !important; }
+          :root:not(.dark) .border-zinc-600 { border-color: #94a3b8 !important; }
+          :root:not(.dark) .hover\:border-zinc-600:hover { border-color: #94a3b8 !important; }
+          :root:not(.dark) .hover\:border-zinc-700:hover { border-color: #cbd5e1 !important; }
+          :root:not(.dark) .divide-zinc-800 > :not([hidden]) ~ :not([hidden]) { border-color: #e2e8f0 !important; }
           :root:not(.dark) .divide-zinc-800\/50 > :not([hidden]) ~ :not([hidden]) { border-color: rgba(226,232,240,0.7) !important; }
+
+          /* Text colors */
           :root:not(.dark) .text-zinc-100 { color: #0f172a !important; }
           :root:not(.dark) .text-zinc-200 { color: #1e293b !important; }
           :root:not(.dark) .text-zinc-300 { color: #334155 !important; }
           :root:not(.dark) .text-zinc-400 { color: #64748b !important; }
           :root:not(.dark) .text-zinc-500 { color: #64748b !important; }
           :root:not(.dark) .text-zinc-600 { color: #94a3b8 !important; }
-          :root:not(.dark) .hover\:text-zinc-300:hover { color: #334155 !important; }
+          :root:not(.dark) .hover\:text-zinc-100:hover { color: #0f172a !important; }
           :root:not(.dark) .hover\:text-zinc-200:hover { color: #1e293b !important; }
+          :root:not(.dark) .hover\:text-zinc-300:hover { color: #334155 !important; }
+          :root:not(.dark) .hover\:text-zinc-400:hover { color: #64748b !important; }
           :root:not(.dark) .placeholder\:text-zinc-600::placeholder { color: #94a3b8 !important; }
+          :root:not(.dark) .placeholder\:text-zinc-500::placeholder { color: #94a3b8 !important; }
+
+          /* Accent/status backgrounds */
           :root:not(.dark) .bg-amber-500\/10 { background-color: rgba(245,158,11,0.08) !important; }
           :root:not(.dark) .bg-amber-500\/15 { background-color: rgba(245,158,11,0.1) !important; }
+          :root:not(.dark) .bg-amber-500\/5 { background-color: rgba(245,158,11,0.05) !important; }
           :root:not(.dark) .bg-green-500\/10 { background-color: rgba(34,197,94,0.08) !important; }
+          :root:not(.dark) .bg-green-500\/15 { background-color: rgba(34,197,94,0.1) !important; }
           :root:not(.dark) .bg-red-500\/10 { background-color: rgba(239,68,68,0.08) !important; }
+          :root:not(.dark) .bg-blue-500\/10 { background-color: rgba(59,130,246,0.08) !important; }
 
-          /* Sidebar light mode */
-          :root:not(.dark) .bg-grid { background-image: radial-gradient(circle at 1px 1px, rgba(0,0,0,0.04) 1px, transparent 0); background-size: 32px 32px; }
-          :root:not(.dark) .bg-radial-glow { background: radial-gradient(ellipse at 50% 0%, rgba(245,158,11,0.08) 0%, transparent 60%); }
-          :root:not(.dark) .glass-card { background: rgba(255,255,255,0.85); backdrop-filter: blur(12px); border: 1px solid rgba(226,232,240,0.8); }
-          :root:not(.dark) .glass-card:hover { background: rgba(255,255,255,0.95); border-color: rgba(203,213,225,0.9); }
+          /* Inputs & forms */
+          :root:not(.dark) input, :root:not(.dark) textarea, :root:not(.dark) select {
+            background-color: #ffffff !important;
+            border-color: #cbd5e1 !important;
+            color: #0f172a !important;
+          }
+          :root:not(.dark) input::placeholder, :root:not(.dark) textarea::placeholder {
+            color: #94a3b8 !important;
+          }
+          :root:not(.dark) input:focus, :root:not(.dark) textarea:focus, :root:not(.dark) select:focus {
+            border-color: #f59e0b !important;
+            box-shadow: 0 0 0 2px rgba(245,158,11,0.15) !important;
+          }
+          :root:not(.dark) kbd {
+            background-color: #f1f5f9 !important;
+            border-color: #cbd5e1 !important;
+            color: #64748b !important;
+          }
+
+          /* Code blocks */
+          :root:not(.dark) code { background-color: #f1f5f9 !important; color: #334155 !important; }
+          :root:not(.dark) .font-mono.text-\[11px\] { color: #475569 !important; }
+
+          /* Sidebar */
+          :root:not(.dark) .bg-grid {
+            background-image: radial-gradient(circle at 1px 1px, rgba(0,0,0,0.03) 1px, transparent 0) !important;
+            background-size: 32px 32px;
+          }
+          :root:not(.dark) .bg-radial-glow {
+            background: radial-gradient(ellipse at 50% 0%, rgba(245,158,11,0.06) 0%, transparent 60%) !important;
+          }
+          :root:not(.dark) .glass-card {
+            background: rgba(255,255,255,0.9) !important;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid #e2e8f0 !important;
+          }
+          :root:not(.dark) .glass-card:hover {
+            background: rgba(255,255,255,0.98) !important;
+            border-color: #cbd5e1 !important;
+          }
+
+          /* Body override for light mode */
+          :root:not(.dark) body { background: #f8fafc !important; color: #0f172a !important; }
+
+          /* Shadow for cards in light mode */
+          :root:not(.dark) [class*="card"] {
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04) !important;
+          }
+
+          /* Ring / focus colors */
+          :root:not(.dark) .ring-zinc-800 { --tw-ring-color: #e2e8f0 !important; }
+          :root:not(.dark) .focus\:border-amber-500\/50:focus { border-color: rgba(245,158,11,0.5) !important; }
+
+          /* Amber accent text stays visible */
+          :root:not(.dark) .text-amber-400 { color: #d97706 !important; }
+          :root:not(.dark) .text-amber-500 { color: #b45309 !important; }
+          :root:not(.dark) .hover\:text-amber-400:hover { color: #d97706 !important; }
+          :root:not(.dark) .hover\:text-amber-300:hover { color: #f59e0b !important; }
+          :root:not(.dark) .border-amber-500\/20 { border-color: rgba(217,119,6,0.25) !important; }
+          :root:not(.dark) .border-amber-500\/30 { border-color: rgba(217,119,6,0.3) !important; }
+          :root:not(.dark) .border-amber-500\/40 { border-color: rgba(217,119,6,0.4) !important; }
+
+          /* Green accent adjustments */
+          :root:not(.dark) .text-green-400 { color: #16a34a !important; }
+          :root:not(.dark) .text-red-400 { color: #dc2626 !important; }
+          :root:not(.dark) .text-cyan-400 { color: #0891b2 !important; }
 
           /* Scrollbar light mode */
-          :root:not(.dark) ::-webkit-scrollbar-track { background: #f1f5f9; }
-          :root:not(.dark) ::-webkit-scrollbar-thumb { background: #cbd5e1; }
-          :root:not(.dark) ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+          :root:not(.dark) ::-webkit-scrollbar-track { background: #f1f5f9 !important; }
+          :root:not(.dark) ::-webkit-scrollbar-thumb { background: #cbd5e1 !important; }
+          :root:not(.dark) ::-webkit-scrollbar-thumb:hover { background: #94a3b8 !important; }
           :root:not(.dark) * { scrollbar-color: #cbd5e1 #f1f5f9; }
 
           /* Selection light mode */
