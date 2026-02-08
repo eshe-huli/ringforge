@@ -388,6 +388,7 @@ defmodule Hub.FleetChannel do
         |> maybe_update(:state, update_payload)
         |> maybe_update(:task, update_payload)
         |> maybe_update(:load, update_payload)
+        |> maybe_update(:model, update_payload)
         |> maybe_update(:metadata, update_payload)
 
       # Update presence tracking
@@ -399,7 +400,8 @@ defmodule Hub.FleetChannel do
         "name" => updated_meta[:name],
         "state" => updated_meta[:state],
         "task" => updated_meta[:task],
-        "load" => updated_meta[:load]
+        "load" => updated_meta[:load],
+        "model" => updated_meta[:model]
       }
 
       broadcast!(socket, "presence:state_changed", %{
