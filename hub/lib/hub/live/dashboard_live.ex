@@ -103,6 +103,19 @@ defmodule Hub.Live.DashboardLive do
           squad_form_name: "",
           squad_form_fleet_id: nil,
           assign_agent_fleet_open: false,
+          # Squad management view
+          squads: [],
+          selected_squad: nil,
+          selected_squad_members: [],
+          selected_squad_memory: [],
+          selected_squad_activity: [],
+          squad_create_form_open: false,
+          squad_view_form_name: "",
+          squad_view_form_description: "",
+          squad_view_form_capabilities: [],
+          squad_memory_filter: "",
+          squad_capability_input: "",
+          squad_detail_tab: "members",
           assign_agent_fleet_agent_id: nil,
           # Kanban board
           kanban_board: %{"backlog" => [], "ready" => [], "in_progress" => [], "review" => [], "done" => []},
@@ -293,6 +306,26 @@ defmodule Hub.Live.DashboardLive do
     socket = if view == "roles" do
       roles = Hub.Roles.list_roles(socket.assigns.tenant_id)
       assign(socket, roles: roles, selected_role: nil, role_detail_open: false, role_form_open: false)
+    else
+      socket
+    end
+
+    socket = if view == "squads" do
+      squads = load_squads_for_fleet(socket.assigns.fleet_id)
+      assign(socket,
+        squads: squads,
+        selected_squad: nil,
+        selected_squad_members: [],
+        selected_squad_memory: [],
+        selected_squad_activity: [],
+        squad_create_form_open: false,
+        squad_view_form_name: "",
+        squad_view_form_description: "",
+        squad_view_form_capabilities: [],
+        squad_memory_filter: "",
+        squad_capability_input: "",
+        squad_detail_tab: "members"
+      )
     else
       socket
     end
@@ -840,6 +873,329 @@ defmodule Hub.Live.DashboardLive do
       {:error, reason} ->
         Process.send_after(self(), :clear_toast, 4_000)
         {:noreply, assign(socket, toast: {:error, "Failed: #{reason}"})}
+    end
+  end
+
+  # ══════════════════════════════════════════════════════════
+  # Squad Management View Events
+  # ══════════════════════════════════════════════════════════
+
+  def handle_event("select_squad", %{"id" => id}, socket) do
+    squad = Enum.find(socket.assigns.squads, &(&1.id == id))
+    if squad do
+      members = Hub.Fleets.squad_agents(id)
+      memory = load_squad_memory(id)
+      activity = filter_squad_activity(socket.assigns.activities, members)
+      {:noreply, assign(socket,
+        selected_squad: squad,
+        selected_squad_members: members,
+        selected_squad_memory: memory,
+        selected_squad_activity: activity,
+        squad_detail_tab: "members"
+      )}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_squad_detail", _, socket) do
+    {:noreply, assign(socket, selected_squad: nil, selected_squad_members: [], selected_squad_memory: [], selected_squad_activity: [])}
+  end
+
+  def handle_event("squad_detail_tab", %{"tab" => tab}, socket) do
+    {:noreply, assign(socket, squad_detail_tab: tab)}
+  end
+
+  # Squad CRUD
+  def handle_event("open_squad_create", _, socket) do
+    {:noreply, assign(socket, squad_create_form_open: true, squad_view_form_name: "", squad_view_form_description: "", squad_view_form_capabilities: [], squad_capability_input: "")}
+  end
+
+  def handle_event("close_squad_create", _, socket) do
+    {:noreply, assign(socket, squad_create_form_open: false)}
+  end
+
+  def handle_event("squad_create_name", %{"value" => v}, socket) do
+    {:noreply, assign(socket, squad_view_form_name: v)}
+  end
+
+  def handle_event("squad_create_description", %{"value" => v}, socket) do
+    {:noreply, assign(socket, squad_view_form_description: v)}
+  end
+
+  def handle_event("squad_capability_input", %{"value" => v}, socket) do
+    {:noreply, assign(socket, squad_capability_input: v)}
+  end
+
+  def handle_event("add_squad_capability", _, socket) do
+    cap = String.trim(socket.assigns.squad_capability_input)
+    if cap != "" and cap not in socket.assigns.squad_view_form_capabilities do
+      {:noreply, assign(socket, squad_view_form_capabilities: socket.assigns.squad_view_form_capabilities ++ [cap], squad_capability_input: "")}
+    else
+      {:noreply, assign(socket, squad_capability_input: "")}
+    end
+  end
+
+  def handle_event("remove_squad_capability", %{"cap" => cap}, socket) do
+    {:noreply, assign(socket, squad_view_form_capabilities: Enum.reject(socket.assigns.squad_view_form_capabilities, &(&1 == cap)))}
+  end
+
+  def handle_event("save_new_squad", _, socket) do
+    name = String.trim(socket.assigns.squad_view_form_name)
+    fleet_id = socket.assigns.fleet_id
+
+    if name == "" do
+      Process.send_after(self(), :clear_toast, 4_000)
+      {:noreply, assign(socket, toast: {:error, "Squad name cannot be empty"})}
+    else
+      attrs = %{
+        name: name,
+        capabilities: socket.assigns.squad_view_form_capabilities
+      }
+      attrs = if socket.assigns.squad_view_form_description != "" do
+        Map.put(attrs, :settings, %{"description" => socket.assigns.squad_view_form_description})
+      else
+        attrs
+      end
+
+      case Hub.Fleets.create_squad(fleet_id, attrs) do
+        {:ok, _squad} ->
+          squads = load_squads_for_fleet(fleet_id)
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket,
+            squads: squads,
+            squad_create_form_open: false,
+            toast: {:success, "Squad \"#{name}\" created"}
+          )}
+
+        {:error, changeset} when is_struct(changeset) ->
+          error = Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
+                  |> Enum.map_join(". ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, error})}
+
+        {:error, reason} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, "Failed: #{inspect(reason)}"})}
+      end
+    end
+  end
+
+  def handle_event("update_squad_name", %{"value" => name}, socket) do
+    name = String.trim(name)
+    squad = socket.assigns.selected_squad
+    if squad && name != "" && name != squad.name do
+      case Hub.Groups.update_group(squad.group_id, %{name: name}) do
+        {:ok, updated} ->
+          squads = load_squads_for_fleet(socket.assigns.fleet_id)
+          updated = Enum.find(squads, &(&1.id == squad.id)) || updated
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, selected_squad: updated, squads: squads, toast: {:success, "Squad name updated"})}
+        {:error, _} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, "Failed to update name"})}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("update_squad_description", %{"value" => desc}, socket) do
+    squad = socket.assigns.selected_squad
+    if squad do
+      settings = Map.merge(squad.settings || %{}, %{"description" => String.trim(desc)})
+      case Hub.Groups.update_group(squad.group_id, %{settings: settings}) do
+        {:ok, updated} ->
+          squads = load_squads_for_fleet(socket.assigns.fleet_id)
+          updated = Enum.find(squads, &(&1.id == squad.id)) || updated
+          {:noreply, assign(socket, selected_squad: updated, squads: squads)}
+        {:error, _} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, "Failed to update description"})}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("add_squad_detail_capability", %{"value" => cap_input}, socket) do
+    cap = String.trim(cap_input)
+    squad = socket.assigns.selected_squad
+    if squad && cap != "" && cap not in (squad.capabilities || []) do
+      new_caps = (squad.capabilities || []) ++ [cap]
+      case Hub.Groups.update_group(squad.group_id, %{capabilities: new_caps}) do
+        {:ok, updated} ->
+          squads = load_squads_for_fleet(socket.assigns.fleet_id)
+          updated = Enum.find(squads, &(&1.id == squad.id)) || updated
+          {:noreply, assign(socket, selected_squad: updated, squads: squads)}
+        {:error, _} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, "Failed to add capability"})}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("remove_squad_detail_capability", %{"cap" => cap}, socket) do
+    squad = socket.assigns.selected_squad
+    if squad do
+      new_caps = Enum.reject(squad.capabilities || [], &(&1 == cap))
+      case Hub.Groups.update_group(squad.group_id, %{capabilities: new_caps}) do
+        {:ok, updated} ->
+          squads = load_squads_for_fleet(socket.assigns.fleet_id)
+          updated = Enum.find(squads, &(&1.id == squad.id)) || updated
+          {:noreply, assign(socket, selected_squad: updated, squads: squads)}
+        {:error, _} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, "Failed to remove capability"})}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("delete_squad", %{"id" => id}, socket) do
+    squad = Enum.find(socket.assigns.squads, &(&1.id == id))
+    if squad do
+      # Remove all agents from this squad first
+      members = Hub.Fleets.squad_agents(id)
+      Enum.each(members, fn agent ->
+        Hub.Fleets.remove_agent_from_squad(agent.agent_id)
+      end)
+      # Dissolve the group
+      Hub.Groups.dissolve_group(squad.group_id)
+      squads = load_squads_for_fleet(socket.assigns.fleet_id)
+      Process.send_after(self(), :clear_toast, 4_000)
+      {:noreply, assign(socket,
+        squads: squads,
+        selected_squad: nil,
+        selected_squad_members: [],
+        selected_squad_memory: [],
+        selected_squad_activity: [],
+        toast: {:success, "Squad \"#{squad.name}\" deleted"}
+      )}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Members
+  def handle_event("squad_add_member", %{"agent-id" => agent_id}, socket) do
+    squad = socket.assigns.selected_squad
+    if squad do
+      case Hub.Fleets.assign_agent_to_squad(agent_id, squad.id) do
+        {:ok, _} ->
+          members = Hub.Fleets.squad_agents(squad.id)
+          squads = load_squads_for_fleet(socket.assigns.fleet_id)
+          squad_updated = Enum.find(squads, &(&1.id == squad.id))
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, selected_squad_members: members, squads: squads, selected_squad: squad_updated || squad, toast: {:success, "Agent added to squad"})}
+
+        {:error, reason} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, "Failed: #{inspect(reason)}"})}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("squad_remove_member", %{"agent-id" => agent_id}, socket) do
+    squad = socket.assigns.selected_squad
+    if squad do
+      case Hub.Fleets.remove_agent_from_squad(agent_id) do
+        {:ok, _} ->
+          members = Hub.Fleets.squad_agents(squad.id)
+          squads = load_squads_for_fleet(socket.assigns.fleet_id)
+          squad_updated = Enum.find(squads, &(&1.id == squad.id))
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, selected_squad_members: members, squads: squads, selected_squad: squad_updated || squad, toast: {:success, "Agent removed from squad"})}
+
+        {:error, reason} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, "Failed: #{inspect(reason)}"})}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("squad_set_leader", params, socket) do
+    agent_id = Map.get(params, "agent-id") || Map.get(params, "value")
+    agent_id = if is_binary(agent_id) && agent_id != "", do: agent_id, else: nil
+    squad = socket.assigns.selected_squad
+    if squad do
+      # Find squad-leader role template, then assign to agent
+      leader_role = try do
+        case Hub.Roles.get_role_by_slug("squad-leader", socket.assigns.tenant_id) do
+          {:ok, role} -> role
+          _ -> nil
+        end
+      rescue
+        _ -> nil
+      end
+
+      agent = Hub.Repo.get_by(Hub.Auth.Agent, agent_id: agent_id)
+      if agent && leader_role do
+        case Hub.Auth.Agent.changeset(agent, %{role_template_id: leader_role.id}) |> Hub.Repo.update() do
+          {:ok, _} ->
+            members = Hub.Fleets.squad_agents(squad.id)
+            Process.send_after(self(), :clear_toast, 4_000)
+            {:noreply, assign(socket, selected_squad_members: members, toast: {:success, "Squad leader set"})}
+          {:error, _} ->
+            Process.send_after(self(), :clear_toast, 4_000)
+            {:noreply, assign(socket, toast: {:error, "Failed to set leader"})}
+        end
+      else
+        # Store leader in squad settings metadata as fallback
+        settings = Map.merge(squad.settings || %{}, %{"leader_agent_id" => agent_id})
+        case Hub.Groups.update_group(squad.group_id, %{settings: settings}) do
+          {:ok, updated} ->
+            squads = load_squads_for_fleet(socket.assigns.fleet_id)
+            updated = Enum.find(squads, &(&1.id == squad.id)) || updated
+            members = Hub.Fleets.squad_agents(squad.id)
+            Process.send_after(self(), :clear_toast, 4_000)
+            {:noreply, assign(socket, selected_squad: updated, squads: squads, selected_squad_members: members, toast: {:success, "Squad leader set"})}
+          {:error, _} ->
+            Process.send_after(self(), :clear_toast, 4_000)
+            {:noreply, assign(socket, toast: {:error, "Failed to set leader"})}
+        end
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Memory
+  def handle_event("squad_memory_search", %{"value" => filter}, socket) do
+    squad = socket.assigns.selected_squad
+    if squad do
+      memory = load_squad_memory(squad.id)
+      filtered = if filter == "" do
+        memory
+      else
+        f = String.downcase(filter)
+        Enum.filter(memory, fn entry ->
+          String.contains?(String.downcase(entry["key"] || ""), f) ||
+          String.contains?(String.downcase(entry["value"] || ""), f)
+        end)
+      end
+      {:noreply, assign(socket, squad_memory_filter: filter, selected_squad_memory: filtered)}
+    else
+      {:noreply, assign(socket, squad_memory_filter: filter)}
+    end
+  end
+
+  def handle_event("squad_memory_delete", %{"key" => key}, socket) do
+    squad = socket.assigns.selected_squad
+    if squad do
+      Hub.SquadMemory.delete(squad.id, key)
+      memory = load_squad_memory(squad.id)
+      Process.send_after(self(), :clear_toast, 4_000)
+      {:noreply, assign(socket, selected_squad_memory: memory, toast: {:success, "Memory key deleted"})}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -2100,6 +2456,7 @@ defmodule Hub.Live.DashboardLive do
             <%!-- ORGANIZATION --%>
             <div class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-3 py-2 mt-4">Organization</div>
             <Components.nav_item view="fleets" icon={:layers} label="Fleets" active={@current_view == "fleets"} badge={to_string(length(@tenant_fleets))} />
+            <Components.nav_item view="squads" icon={:users} label="Squads" active={@current_view == "squads"} badge={to_string(length(@squads))} />
             <Components.nav_item view="roles" icon={:shield} label="Roles" active={@current_view == "roles"} />
             <Components.nav_item view="activity" icon={:activity} label="Activity" active={@current_view == "activity"} />
 
@@ -2134,6 +2491,7 @@ defmodule Hub.Live.DashboardLive do
           <%= case @current_view do %>
             <% "dashboard" -> %> <%= render_overview(assigns) %>
             <% "fleets" -> %> <%= render_fleets(assigns) %>
+            <% "squads" -> %> <%= render_squads(assigns) %>
             <% "agents" -> %> <%= render_agents(assigns) %>
             <% "roles" -> %> <%= render_roles(assigns) %>
             <% "activity" -> %> <%= render_activity(assigns) %>
@@ -2736,6 +3094,499 @@ defmodule Hub.Live.DashboardLive do
   # ══════════════════════════════════════════════════════════
   # Page: Roles
   # ══════════════════════════════════════════════════════════
+
+  defp render_squads(assigns) do
+    ~H"""
+    <div class="h-full flex animate-fade-in">
+      <%!-- Squad list panel --%>
+      <div class="w-72 border-r border-zinc-800 flex flex-col overflow-hidden shrink-0 bg-zinc-900">
+        <div class="px-4 py-4 border-b border-zinc-800">
+          <div class="flex items-center justify-between mb-1">
+            <h2 class="text-sm font-semibold text-zinc-100">Squads</h2>
+            <.button variant="outline" size="sm" phx-click="open_squad_create"
+              class="h-7 px-2.5 text-[10px] border-amber-500/30 text-amber-400 hover:bg-amber-500/10">
+              <Icons.plus class="w-3 h-3 mr-1" /> New Squad
+            </.button>
+          </div>
+          <p class="text-[11px] text-zinc-500"><%= length(@squads) %> squad<%= if length(@squads) != 1, do: "s" %></p>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-2 space-y-1">
+          <%= for squad <- @squads do %>
+            <% member_count = length(squad.members || []) %>
+            <% leader = get_squad_leader(squad, Hub.Fleets.squad_agents(squad.id)) %>
+            <button
+              phx-click="select_squad"
+              phx-value-id={squad.id}
+              class={"w-full text-left px-3 py-2.5 rounded-lg transition-colors duration-150 group " <>
+                if(@selected_squad && @selected_squad.id == squad.id, do: "bg-zinc-800 border border-zinc-700", else: "hover:bg-zinc-800/50 border border-transparent")}
+            >
+              <div class="flex items-center justify-between">
+                <div class="min-w-0 flex-1">
+                  <div class="text-sm font-medium text-zinc-200 truncate"><%= squad.name %></div>
+                  <div class="flex items-center gap-2 mt-0.5">
+                    <div class="flex items-center gap-1">
+                      <Icons.users class="w-3 h-3 text-zinc-600" />
+                      <span class="text-[10px] text-zinc-500"><%= member_count %></span>
+                    </div>
+                    <%= if leader do %>
+                      <span class="text-[10px] text-amber-500/70">👑 <%= leader.name || leader.agent_id %></span>
+                    <% end %>
+                  </div>
+                </div>
+              </div>
+              <%= if squad.capabilities != [] do %>
+                <div class="flex flex-wrap gap-1 mt-1.5">
+                  <%= for cap <- Enum.take(squad.capabilities || [], 3) do %>
+                    <span class="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/15"><%= cap %></span>
+                  <% end %>
+                  <%= if length(squad.capabilities || []) > 3 do %>
+                    <span class="text-[9px] text-zinc-600">+<%= length(squad.capabilities) - 3 %></span>
+                  <% end %>
+                </div>
+              <% end %>
+            </button>
+          <% end %>
+
+          <%= if @squads == [] do %>
+            <div class="text-center py-8">
+              <Icons.users class="w-8 h-8 text-zinc-700 mx-auto mb-2" />
+              <p class="text-xs text-zinc-600">No squads yet</p>
+              <p class="text-[10px] text-zinc-700 mt-1">Create a squad to organize agents</p>
+            </div>
+          <% end %>
+        </div>
+      </div>
+
+      <%!-- Squad detail panel --%>
+      <div class="flex-1 overflow-y-auto">
+        <%= if @selected_squad do %>
+          <% squad = @selected_squad %>
+          <% leader = get_squad_leader(squad, @selected_squad_members) %>
+          <% description = squad_description(squad) %>
+          <div class="p-6 space-y-6">
+            <%!-- Header --%>
+            <div class="flex items-start justify-between">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-blue-500/15 border border-blue-500/25 flex items-center justify-center">
+                  <Icons.users class="w-5 h-5 text-blue-400" />
+                </div>
+                <div>
+                  <input
+                    type="text"
+                    value={squad.name}
+                    phx-blur="update_squad_name"
+                    class="text-lg font-semibold text-zinc-100 bg-transparent border-none outline-none focus:ring-1 focus:ring-amber-500/30 rounded px-1 -ml-1"
+                  />
+                  <div class="flex items-center gap-2 mt-0.5">
+                    <span class="text-[10px] text-zinc-600 font-mono"><%= squad.group_id %></span>
+                    <%= if leader do %>
+                      <span class="text-[10px] text-amber-400">👑 <%= leader.name || leader.agent_id %></span>
+                    <% end %>
+                  </div>
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <.button variant="outline" size="sm"
+                  phx-click="delete_squad"
+                  phx-value-id={squad.id}
+                  data-confirm={"Delete squad \"#{squad.name}\"? Agents will be unassigned."}
+                  class="h-8 text-xs border-red-500/20 text-red-400/70 hover:bg-red-500/10 hover:text-red-300">
+                  <Icons.trash class="w-3.5 h-3.5 mr-1.5" /> Delete
+                </.button>
+              </div>
+            </div>
+
+            <%!-- Description --%>
+            <div>
+              <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-1 block">Description</label>
+              <textarea
+                rows="2"
+                phx-blur="update_squad_description"
+                class="w-full text-sm text-zinc-300 bg-zinc-900 border border-zinc-800 rounded-lg p-2.5 focus:border-zinc-600 focus:outline-none resize-none"
+                placeholder="Squad description..."
+              ><%= description %></textarea>
+            </div>
+
+            <%!-- Capabilities tag editor --%>
+            <div>
+              <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 block">Capabilities</label>
+              <div class="flex flex-wrap gap-1.5 mb-2">
+                <%= for cap <- (squad.capabilities || []) do %>
+                  <span class="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                    <%= cap %>
+                    <button phx-click="remove_squad_detail_capability" phx-value-cap={cap} class="hover:text-red-400 ml-0.5">
+                      <Icons.x class="w-3 h-3" />
+                    </button>
+                  </span>
+                <% end %>
+                <%= if (squad.capabilities || []) == [] do %>
+                  <span class="text-[11px] text-zinc-600 italic">No capabilities defined</span>
+                <% end %>
+              </div>
+              <form phx-submit="add_squad_detail_capability" class="flex gap-2">
+                <input
+                  type="text"
+                  name="value"
+                  placeholder="Add capability..."
+                  class="flex-1 h-7 text-xs bg-zinc-900 border border-zinc-800 rounded px-2 text-zinc-300 focus:border-zinc-600 focus:outline-none"
+                />
+                <.button type="submit" variant="outline" size="sm" class="h-7 px-2 text-[10px] border-zinc-700 text-zinc-400">
+                  <Icons.plus class="w-3 h-3" />
+                </.button>
+              </form>
+            </div>
+
+            <%!-- Stats cards --%>
+            <div class="grid grid-cols-4 gap-3">
+              <.card class="bg-zinc-900 border-zinc-800">
+                <.card_content class="p-3 text-center">
+                  <div class="text-xl font-bold text-zinc-100"><%= length(@selected_squad_members) %></div>
+                  <div class="text-[10px] text-zinc-500 mt-0.5">Members</div>
+                </.card_content>
+              </.card>
+              <.card class="bg-zinc-900 border-zinc-800">
+                <.card_content class="p-3 text-center">
+                  <div class="text-xl font-bold text-zinc-100"><%= length(squad.capabilities || []) %></div>
+                  <div class="text-[10px] text-zinc-500 mt-0.5">Capabilities</div>
+                </.card_content>
+              </.card>
+              <.card class="bg-zinc-900 border-zinc-800">
+                <.card_content class="p-3 text-center">
+                  <div class="text-xl font-bold text-zinc-100"><%= length(@selected_squad_memory) %></div>
+                  <div class="text-[10px] text-zinc-500 mt-0.5">Memory Keys</div>
+                </.card_content>
+              </.card>
+              <.card class="bg-zinc-900 border-zinc-800">
+                <.card_content class="p-3 text-center">
+                  <div class="text-xl font-bold text-zinc-100"><%= length(@selected_squad_activity) %></div>
+                  <div class="text-[10px] text-zinc-500 mt-0.5">Activities</div>
+                </.card_content>
+              </.card>
+            </div>
+
+            <%!-- Tab navigation --%>
+            <div class="border-b border-zinc-800">
+              <div class="flex gap-4">
+                <%= for {tab, label, icon} <- [{"members", "Members", :users}, {"memory", "Memory", :database}, {"activity", "Activity", :activity}] do %>
+                  <button
+                    phx-click="squad_detail_tab"
+                    phx-value-tab={tab}
+                    class={"pb-2 px-1 text-sm font-medium border-b-2 transition-colors " <>
+                      if(@squad_detail_tab == tab, do: "border-amber-500 text-amber-400", else: "border-transparent text-zinc-500 hover:text-zinc-300")}
+                  >
+                    <div class="flex items-center gap-1.5">
+                      <%= case icon do %>
+                        <% :users -> %> <Icons.users class="w-3.5 h-3.5" />
+                        <% :database -> %> <Icons.database class="w-3.5 h-3.5" />
+                        <% :activity -> %> <Icons.activity class="w-3.5 h-3.5" />
+                        <% _ -> %> <Icons.circle class="w-3.5 h-3.5" />
+                      <% end %>
+                      <%= label %>
+                    </div>
+                  </button>
+                <% end %>
+              </div>
+            </div>
+
+            <%!-- Tab content --%>
+            <%= case @squad_detail_tab do %>
+              <% "members" -> %>
+                <%!-- Leader section --%>
+                <div class="mb-4">
+                  <div class="flex items-center justify-between mb-2">
+                    <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Squad Leader</label>
+                  </div>
+                  <%= if leader do %>
+                    <div class="flex items-center justify-between p-3 rounded-lg bg-amber-500/5 border border-amber-500/15">
+                      <div class="flex items-center gap-2.5">
+                        <div class="w-8 h-8 rounded-lg bg-amber-500/15 flex items-center justify-center text-sm font-bold text-amber-400">
+                          👑
+                        </div>
+                        <div>
+                          <div class="text-sm font-medium text-zinc-200"><%= leader.name || leader.agent_id %></div>
+                          <div class="text-[10px] text-zinc-600 font-mono"><%= leader.agent_id %></div>
+                        </div>
+                      </div>
+                    </div>
+                  <% else %>
+                    <div class="p-3 rounded-lg bg-zinc-900 border border-zinc-800 text-center">
+                      <p class="text-[11px] text-zinc-600">No leader assigned</p>
+                    </div>
+                  <% end %>
+                  <%= if @selected_squad_members != [] do %>
+                    <div class="mt-2">
+                      <select
+                        phx-change="squad_set_leader"
+                        name="agent-id"
+                        class="w-full h-8 text-xs bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-300 px-2 focus:border-zinc-600 focus:outline-none"
+                      >
+                        <option value="">Set leader...</option>
+                        <%= for agent <- @selected_squad_members do %>
+                          <option value={agent.agent_id}><%= agent.name || agent.agent_id %></option>
+                        <% end %>
+                      </select>
+                    </div>
+                  <% end %>
+                </div>
+
+                <%!-- Members list --%>
+                <div>
+                  <div class="flex items-center justify-between mb-3">
+                    <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Members (<%= length(@selected_squad_members) %>)</label>
+                  </div>
+
+                  <%= if @selected_squad_members != [] do %>
+                    <div class="space-y-1">
+                      <%= for agent <- @selected_squad_members do %>
+                        <% agent = Hub.Repo.preload(agent, [:role_template]) %>
+                        <% is_leader = leader && leader.agent_id == agent.agent_id %>
+                        <div class="flex items-center justify-between py-2 px-3 rounded-lg bg-zinc-900 border border-zinc-800 group">
+                          <div class="flex items-center gap-2.5">
+                            <div class={"w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-bold " <>
+                              if(is_leader, do: "bg-amber-500/15 text-amber-400", else: "bg-zinc-800 text-zinc-400")}>
+                              <%= if is_leader, do: "👑", else: String.first(agent.name || agent.agent_id) |> String.upcase() %>
+                            </div>
+                            <div>
+                              <button
+                                phx-click="navigate"
+                                phx-value-view="agents"
+                                phx-value-agent={agent.agent_id}
+                                class="text-xs font-medium text-zinc-200 hover:text-amber-400 transition-colors"
+                              >
+                                <%= agent.name || agent.agent_id %>
+                              </button>
+                              <div class="flex items-center gap-1.5 mt-0.5">
+                                <span class="text-[10px] text-zinc-600 font-mono"><%= agent.agent_id %></span>
+                                <%= if agent.role_template do %>
+                                  <span class="text-[9px] px-1.5 py-0 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/15"><%= agent.role_template.name %></span>
+                                <% end %>
+                                <%= if agent.context_tier do %>
+                                  <span class={"text-[9px] px-1.5 py-0 rounded border " <> tier_badge_class(agent.context_tier |> to_string() |> String.to_integer())}>T<%= agent.context_tier %></span>
+                                <% end %>
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            phx-click="squad_remove_member"
+                            phx-value-agent-id={agent.agent_id}
+                            class="text-[10px] text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                            title="Remove from squad"
+                          >
+                            <Icons.x class="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      <% end %>
+                    </div>
+                  <% else %>
+                    <div class="p-4 rounded-lg bg-zinc-900 border border-zinc-800 text-center">
+                      <Icons.users class="w-6 h-6 text-zinc-700 mx-auto mb-1" />
+                      <p class="text-[11px] text-zinc-600">No members in this squad</p>
+                    </div>
+                  <% end %>
+
+                  <%!-- Add member --%>
+                  <div class="mt-3">
+                    <% all_agents = load_registered_agents_detail(@fleet_id) %>
+                    <% available = Enum.filter(all_agents, fn a -> is_nil(a.squad_id) || a.squad_id != squad.id end) %>
+                    <%= if available != [] do %>
+                      <select
+                        phx-change="squad_add_member"
+                        name="agent-id"
+                        class="w-full h-8 text-xs bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-300 px-2 focus:border-zinc-600 focus:outline-none"
+                      >
+                        <option value="">Add member...</option>
+                        <%= for agent <- available do %>
+                          <option value={agent.agent_id}>
+                            <%= agent.name || agent.agent_id %><%= if agent.squad_id, do: " (in another squad)", else: "" %>
+                          </option>
+                        <% end %>
+                      </select>
+                    <% end %>
+                  </div>
+                </div>
+
+              <% "memory" -> %>
+                <%!-- Memory browser --%>
+                <div>
+                  <div class="flex items-center gap-2 mb-3">
+                    <input
+                      type="text"
+                      phx-keyup="squad_memory_search"
+                      value={@squad_memory_filter}
+                      placeholder="Search memory keys..."
+                      class="flex-1 h-8 text-xs bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-300 px-3 focus:border-zinc-600 focus:outline-none"
+                    />
+                  </div>
+
+                  <%= if @selected_squad_memory != [] do %>
+                    <div class="space-y-1">
+                      <%= for entry <- @selected_squad_memory do %>
+                        <div class="p-3 rounded-lg bg-zinc-900 border border-zinc-800 group">
+                          <div class="flex items-center justify-between mb-1">
+                            <span class="text-xs font-medium text-zinc-200 font-mono"><%= entry["key"] %></span>
+                            <div class="flex items-center gap-2">
+                              <%= if entry["updated_at"] do %>
+                                <span class="text-[10px] text-zinc-600"><%= entry["updated_at"] |> String.slice(0..18) %></span>
+                              <% end %>
+                              <button
+                                phx-click="squad_memory_delete"
+                                phx-value-key={entry["key"]}
+                                data-confirm={"Delete memory key \"#{entry["key"]}\"?"}
+                                class="text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                              >
+                                <Icons.trash class="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                          <div class="text-[11px] text-zinc-400 font-mono truncate max-w-md">
+                            <%= String.slice(entry["value"] || "", 0..200) %><%= if String.length(entry["value"] || "") > 200, do: "…" %>
+                          </div>
+                          <div class="flex items-center gap-2 mt-1">
+                            <%= if entry["type"] do %>
+                              <span class="text-[9px] px-1.5 py-0 rounded bg-zinc-800 text-zinc-500"><%= entry["type"] %></span>
+                            <% end %>
+                            <%= if entry["author"] do %>
+                              <span class="text-[9px] text-zinc-600">by <%= entry["author"] %></span>
+                            <% end %>
+                            <%= for tag <- (entry["tags"] || []) do %>
+                              <span class="text-[9px] px-1 py-0 rounded bg-purple-500/10 text-purple-400"><%= tag %></span>
+                            <% end %>
+                          </div>
+                        </div>
+                      <% end %>
+                    </div>
+                  <% else %>
+                    <div class="p-6 rounded-lg bg-zinc-900 border border-zinc-800 text-center">
+                      <Icons.database class="w-6 h-6 text-zinc-700 mx-auto mb-1" />
+                      <p class="text-[11px] text-zinc-600">No squad memory entries</p>
+                      <p class="text-[10px] text-zinc-700 mt-0.5">Memory will appear when agents write to squad-scoped storage</p>
+                    </div>
+                  <% end %>
+                </div>
+
+              <% "activity" -> %>
+                <%!-- Activity feed --%>
+                <div>
+                  <%= if @selected_squad_activity != [] do %>
+                    <div class="space-y-1">
+                      <%= for act <- Enum.take(@selected_squad_activity, 30) do %>
+                        <div class="py-2 px-3 rounded-lg bg-zinc-900 border border-zinc-800">
+                          <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                              <Icons.activity class="w-3 h-3 text-zinc-600" />
+                              <span class="text-xs text-zinc-300"><%= Map.get(act, :agent_id) || Map.get(act, "agent_id") || "Unknown" %></span>
+                              <span class="text-[11px] text-zinc-500"><%= Map.get(act, :type) || Map.get(act, "type") || "" %></span>
+                            </div>
+                            <span class="text-[10px] text-zinc-600">
+                              <%= if ts = (Map.get(act, :timestamp) || Map.get(act, "timestamp")) do %>
+                                <%= if is_binary(ts), do: String.slice(ts, 11..18), else: "" %>
+                              <% end %>
+                            </span>
+                          </div>
+                          <%= if summary = (Map.get(act, :summary) || Map.get(act, "summary")) do %>
+                            <p class="text-[11px] text-zinc-500 mt-0.5 truncate"><%= String.slice(summary, 0..150) %></p>
+                          <% end %>
+                        </div>
+                      <% end %>
+                    </div>
+                  <% else %>
+                    <div class="p-6 rounded-lg bg-zinc-900 border border-zinc-800 text-center">
+                      <Icons.activity class="w-6 h-6 text-zinc-700 mx-auto mb-1" />
+                      <p class="text-[11px] text-zinc-600">No recent activity from squad members</p>
+                    </div>
+                  <% end %>
+                </div>
+
+              <% _ -> %>
+                <div></div>
+            <% end %>
+
+            <%!-- Squad ID --%>
+            <div class="text-[10px] text-zinc-600 font-mono pt-4 border-t border-zinc-800">
+              Squad ID: <%= squad.id %> · Group ID: <%= squad.group_id %>
+            </div>
+          </div>
+        <% else %>
+          <%!-- No squad selected --%>
+          <div class="flex-1 flex items-center justify-center h-full">
+            <div class="text-center">
+              <div class="w-14 h-14 rounded-2xl bg-zinc-800 flex items-center justify-center mb-4 mx-auto">
+                <Icons.users class="w-6 h-6 text-zinc-600" />
+              </div>
+              <p class="font-medium text-zinc-400">Select a squad</p>
+              <p class="text-sm text-zinc-500 mt-1">Choose from the list or create a new one</p>
+            </div>
+          </div>
+        <% end %>
+      </div>
+
+      <%!-- Create squad modal --%>
+      <%= if @squad_create_form_open do %>
+        <div class="fixed inset-0 z-[60] flex items-center justify-center animate-fade-in">
+          <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" phx-click="close_squad_create"></div>
+          <div class="relative w-full max-w-md mx-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl">
+            <div class="px-6 py-4 border-b border-zinc-800">
+              <h3 class="text-sm font-semibold text-zinc-100">Create Squad</h3>
+            </div>
+            <div class="p-6 space-y-4">
+              <div>
+                <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Name</label>
+                <input
+                  type="text"
+                  phx-keyup="squad_create_name"
+                  value={@squad_view_form_name}
+                  placeholder="e.g. DevOps Squad"
+                  class="w-full h-9 text-sm bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200 px-3 focus:border-zinc-600 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Description</label>
+                <textarea
+                  rows="2"
+                  phx-keyup="squad_create_description"
+                  placeholder="What does this squad do?"
+                  class="w-full text-sm bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200 p-3 focus:border-zinc-600 focus:outline-none resize-none"
+                ><%= @squad_view_form_description %></textarea>
+              </div>
+              <div>
+                <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Capabilities</label>
+                <div class="flex flex-wrap gap-1.5 mb-2">
+                  <%= for cap <- @squad_view_form_capabilities do %>
+                    <span class="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                      <%= cap %>
+                      <button type="button" phx-click="remove_squad_capability" phx-value-cap={cap} class="hover:text-red-400">
+                        <Icons.x class="w-3 h-3" />
+                      </button>
+                    </span>
+                  <% end %>
+                </div>
+                <div class="flex gap-2">
+                  <input
+                    type="text"
+                    phx-keyup="squad_capability_input"
+                    value={@squad_capability_input}
+                    placeholder="Add capability..."
+                    class="flex-1 h-8 text-xs bg-zinc-950 border border-zinc-800 rounded px-2 text-zinc-300 focus:border-zinc-600 focus:outline-none"
+                    phx-keydown="add_squad_capability"
+                    phx-key="Enter"
+                  />
+                  <.button type="button" variant="outline" size="sm" phx-click="add_squad_capability" class="h-8 px-2 border-zinc-700 text-zinc-400">
+                    Add
+                  </.button>
+                </div>
+              </div>
+            </div>
+            <div class="px-6 py-4 border-t border-zinc-800 flex justify-end gap-2">
+              <.button variant="outline" size="sm" phx-click="close_squad_create" class="h-9 px-4 border-zinc-700 text-zinc-400 hover:text-zinc-200">Cancel</.button>
+              <.button variant="outline" size="sm" phx-click="save_new_squad" class="h-9 px-4 border-amber-500/30 text-amber-400 hover:bg-amber-500/10">Create Squad</.button>
+            </div>
+          </div>
+        </div>
+      <% end %>
+    </div>
+    """
+  end
 
   defp render_roles(assigns) do
     ~H"""
@@ -5319,6 +6170,53 @@ defmodule Hub.Live.DashboardLive do
       order_by: [desc: a.inserted_at],
       preload: [:fleet]
     ) |> Hub.Repo.all()
+  end
+
+  defp load_squads_for_fleet(fleet_id) do
+    try do
+      Hub.Fleets.list_squads(fleet_id)
+    rescue
+      _ -> []
+    end
+  end
+
+  defp load_squad_memory(squad_id) do
+    case Hub.SquadMemory.list(squad_id, limit: 100) do
+      {:ok, entries} -> entries
+      _ -> []
+    end
+  rescue
+    _ -> []
+  end
+
+  defp filter_squad_activity(activities, members) do
+    member_ids = MapSet.new(Enum.map(members, & &1.agent_id))
+    activities
+    |> Enum.filter(fn act ->
+      agent_id = Map.get(act, :agent_id) || Map.get(act, "agent_id")
+      agent_id && MapSet.member?(member_ids, agent_id)
+    end)
+    |> Enum.take(50)
+  end
+
+  defp get_squad_leader(squad, members) do
+    # First check settings for explicit leader
+    leader_id = get_in(squad.settings || %{}, ["leader_agent_id"])
+    if leader_id do
+      Enum.find(members, &(&1.agent_id == leader_id))
+    else
+      # Check for agent with squad-leader role template
+      Enum.find(members, fn agent ->
+        agent = Hub.Repo.preload(agent, [:role_template])
+        agent.role_template && agent.role_template.slug == "squad-leader"
+      end)
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp squad_description(squad) do
+    get_in(squad.settings || %{}, ["description"]) || ""
   end
 
   defp load_registered_agents_detail(fleet_id) do
