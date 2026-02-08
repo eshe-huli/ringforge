@@ -232,6 +232,14 @@ defmodule Hub.Layouts do
           :root:not(.dark) .text-red-400 { color: #dc2626 !important; }
           :root:not(.dark) .text-cyan-400 { color: #0891b2 !important; }
 
+          /* Badge & misc dark backgrounds */
+          :root:not(.dark) .bg-zinc-700 { background-color: #e2e8f0 !important; }
+          :root:not(.dark) .bg-zinc-700\/50 { background-color: rgba(226,232,240,0.6) !important; }
+          :root:not(.dark) .bg-zinc-600 { background-color: #cbd5e1 !important; }
+          :root:not(.dark) .hover\:bg-zinc-700:hover { background-color: #cbd5e1 !important; }
+          :root:not(.dark) .border-zinc-700\/50 { border-color: rgba(203,213,225,0.6) !important; }
+          :root:not(.dark) .border-zinc-600\/50 { border-color: rgba(148,163,184,0.5) !important; }
+
           /* Scrollbar light mode */
           :root:not(.dark) ::-webkit-scrollbar-track { background: #f1f5f9 !important; }
           :root:not(.dark) ::-webkit-scrollbar-thumb { background: #cbd5e1 !important; }
