@@ -18,6 +18,7 @@ defmodule Hub.Live.DashboardLive do
 
   alias Hub.FleetPresence
   alias Hub.Live.Components
+  alias Phoenix.LiveView.JS
   alias Hub.Live.Icons
 
   @activity_limit 100
@@ -47,6 +48,24 @@ defmodule Hub.Live.DashboardLive do
           msg_to: nil,
           msg_body: "",
           messages: [],
+          messaging_tab: "dms",
+          msg_access_result: nil,
+          threads: [],
+          selected_thread: nil,
+          thread_messages: [],
+          escalations: [],
+          escalation_action: nil,
+          escalation_action_id: nil,
+          escalation_forward_to: nil,
+          escalation_response: "",
+          announcements: [],
+          announcement_form: %{scope: "fleet", body: "", priority: "normal"},
+          registered_agents_detail: [],
+          agent_kanban_tasks: [],
+          agent_role_editing: false,
+          agent_squad_editing: false,
+          available_roles: [],
+          available_squads: [],
           filter: "all",
           search_query: "",
           sort_by: :name,
@@ -106,6 +125,8 @@ defmodule Hub.Live.DashboardLive do
           kanban_squads: [],
           kanban_edit_mode: false,
           kanban_progress_pct: 0,
+          selected_task_artifacts: [],
+          selected_task_threads: [],
           # Roles management
           roles: [],
           selected_role: nil,
@@ -224,19 +245,41 @@ defmodule Hub.Live.DashboardLive do
   def handle_event("navigate", %{"view" => view} = params, socket) do
     socket = assign(socket, current_view: view, cmd_open: false, cmd_query: "")
 
-    socket = if view == "agents" && params["agent"] do
-      assign(socket,
-        selected_agent: params["agent"],
-        agent_detail_open: true,
-        agent_activities: filter_agent_activities(socket.assigns.activities, params["agent"])
+    socket = if view == "agents" do
+      registered = load_registered_agents_detail(socket.assigns.fleet_id)
+      roles = Hub.Roles.list_roles(socket.assigns.tenant_id)
+      squads = try do Hub.Fleets.list_squads(socket.assigns.fleet_id) rescue _ -> [] end
+
+      base = assign(socket,
+        registered_agents_detail: registered,
+        available_roles: roles,
+        available_squads: squads,
+        agent_role_editing: false,
+        agent_squad_editing: false
       )
+
+      if params["agent"] do
+        assign(base,
+          selected_agent: params["agent"],
+          agent_detail_open: true,
+          agent_activities: filter_agent_activities(base.assigns.activities, params["agent"]),
+          agent_kanban_tasks: load_agent_kanban_tasks(params["agent"], base.assigns.fleet_id)
+        )
+      else
+        base
+      end
     else
       socket
     end
 
-    socket = if view == "messaging" && params["agent"] do
-      messages = load_conversation(socket.assigns.fleet_id, params["agent"])
-      assign(socket, msg_to: params["agent"], messages: messages)
+    socket = if view == "messaging" do
+      base = assign(socket, messaging_tab: "dms", msg_access_result: nil)
+      if params["agent"] do
+        messages = load_conversation(base.assigns.fleet_id, params["agent"])
+        assign(base, msg_to: params["agent"], messages: messages)
+      else
+        base
+      end
     else
       socket
     end
@@ -289,7 +332,10 @@ defmodule Hub.Live.DashboardLive do
     {:noreply, assign(socket,
       selected_agent: agent_id,
       agent_detail_open: true,
-      agent_activities: filter_agent_activities(socket.assigns.activities, agent_id)
+      agent_activities: filter_agent_activities(socket.assigns.activities, agent_id),
+      agent_kanban_tasks: load_agent_kanban_tasks(agent_id, socket.assigns.fleet_id),
+      agent_role_editing: false,
+      agent_squad_editing: false
     )}
   end
 
@@ -328,6 +374,224 @@ defmodule Hub.Live.DashboardLive do
     agent_id = socket.assigns.selected_agent
     messages = load_conversation(socket.assigns.fleet_id, agent_id)
     {:noreply, assign(socket, current_view: "messaging", msg_to: agent_id, messages: messages, agent_detail_open: false, selected_agent: nil)}
+  end
+
+  # ── Messaging Tab Events ──────────────────────────────────────
+
+  def handle_event("switch_messaging_tab", %{"tab" => tab}, socket) do
+    fleet_id = socket.assigns.fleet_id
+
+    socket = case tab do
+      "threads" ->
+        threads = Hub.Messaging.Threads.list_threads(fleet_id, status: "open")
+        assign(socket, messaging_tab: tab, threads: threads)
+
+      "escalations" ->
+        # Load pending escalations — dashboard user acts as tier-0 handler
+        escalations = Hub.Messaging.Escalation.list_pending(fleet_id, "dashboard")
+        assign(socket, messaging_tab: tab, escalations: escalations)
+
+      "announcements" ->
+        case Hub.Messaging.Announcements.history(fleet_id) do
+          {:ok, anns} -> assign(socket, messaging_tab: tab, announcements: anns)
+          _ -> assign(socket, messaging_tab: tab, announcements: [])
+        end
+
+      _ ->
+        assign(socket, messaging_tab: tab)
+    end
+
+    {:noreply, socket}
+  end
+
+  # Thread events
+  def handle_event("select_thread", %{"thread-id" => thread_id}, socket) do
+    case Hub.Messaging.Threads.thread_messages(thread_id) do
+      {:ok, msgs} ->
+        {:noreply, assign(socket, selected_thread: thread_id, thread_messages: msgs)}
+      _ ->
+        {:noreply, assign(socket, selected_thread: thread_id, thread_messages: [])}
+    end
+  end
+
+  def handle_event("create_thread", %{"subject" => subject, "scope" => scope}, socket) do
+    fleet_id = socket.assigns.fleet_id
+    tenant_id = socket.assigns.tenant_id
+
+    case Hub.Messaging.Threads.create_thread(%{
+      subject: subject,
+      scope: scope,
+      fleet_id: fleet_id,
+      tenant_id: tenant_id,
+      created_by: "dashboard",
+      participant_ids: ["dashboard"]
+    }) do
+      {:ok, _thread} ->
+        threads = Hub.Messaging.Threads.list_threads(fleet_id, status: "open")
+        {:noreply, assign(socket, threads: threads, toast: {:success, "Thread created"})}
+      {:error, _} ->
+        {:noreply, assign(socket, toast: {:error, "Failed to create thread"})}
+    end
+  end
+
+  def handle_event("send_thread_message", %{"body" => body}, socket) do
+    thread_id = socket.assigns.selected_thread
+    if thread_id && String.trim(body) != "" do
+      case Hub.Messaging.Threads.add_message(thread_id, "dashboard", %{body: body}) do
+        {:ok, _msg} ->
+          {:ok, msgs} = Hub.Messaging.Threads.thread_messages(thread_id)
+          {:noreply, assign(socket, thread_messages: msgs)}
+        {:error, _} ->
+          {:noreply, assign(socket, toast: {:error, "Failed to send message"})}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_thread", %{"thread-id" => thread_id}, socket) do
+    case Hub.Messaging.Threads.close_thread(thread_id, "dashboard", "Closed from dashboard") do
+      {:ok, _} ->
+        threads = Hub.Messaging.Threads.list_threads(socket.assigns.fleet_id, status: "open")
+        {:noreply, assign(socket, threads: threads, selected_thread: nil, thread_messages: [], toast: {:success, "Thread closed"})}
+      {:error, _} ->
+        {:noreply, assign(socket, toast: {:error, "Failed to close thread"})}
+    end
+  end
+
+  # Escalation events
+  def handle_event("escalation_action", %{"action" => action, "id" => id}, socket) do
+    {:noreply, assign(socket, escalation_action: action, escalation_action_id: id, escalation_response: "")}
+  end
+
+  def handle_event("cancel_escalation_action", _, socket) do
+    {:noreply, assign(socket, escalation_action: nil, escalation_action_id: nil, escalation_response: "")}
+  end
+
+  def handle_event("escalation_forward_select", %{"agent" => agent_id}, socket) do
+    {:noreply, assign(socket, escalation_forward_to: agent_id)}
+  end
+
+  def handle_event("submit_escalation_forward", _, socket) do
+    esc_id = socket.assigns.escalation_action_id
+    to = socket.assigns.escalation_forward_to
+    if esc_id && to do
+      Hub.Messaging.Escalation.forward_escalation(esc_id, "dashboard", to)
+      escalations = Hub.Messaging.Escalation.list_pending(socket.assigns.fleet_id, "dashboard")
+      {:noreply, assign(socket, escalations: escalations, escalation_action: nil, escalation_action_id: nil, toast: {:success, "Escalation forwarded"})}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("submit_escalation_handle", %{"response" => response}, socket) do
+    esc_id = socket.assigns.escalation_action_id
+    if esc_id do
+      Hub.Messaging.Escalation.handle_escalation(esc_id, "dashboard", response)
+      escalations = Hub.Messaging.Escalation.list_pending(socket.assigns.fleet_id, "dashboard")
+      {:noreply, assign(socket, escalations: escalations, escalation_action: nil, escalation_action_id: nil, toast: {:success, "Escalation handled"})}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("submit_escalation_reject", %{"reason" => reason}, socket) do
+    esc_id = socket.assigns.escalation_action_id
+    if esc_id do
+      Hub.Messaging.Escalation.reject_escalation(esc_id, "dashboard", reason)
+      escalations = Hub.Messaging.Escalation.list_pending(socket.assigns.fleet_id, "dashboard")
+      {:noreply, assign(socket, escalations: escalations, escalation_action: nil, escalation_action_id: nil, toast: {:success, "Escalation rejected"})}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Announcement events
+  def handle_event("update_announcement_form", params, socket) do
+    form = socket.assigns.announcement_form
+    form = Map.merge(form, Map.take(params, ["scope", "body", "priority"]) |> Map.new(fn {k,v} -> {String.to_existing_atom(k), v} end))
+    {:noreply, assign(socket, announcement_form: form)}
+  end
+
+  def handle_event("send_announcement", %{"body" => body, "scope" => scope, "priority" => priority}, socket) do
+    fleet_id = socket.assigns.fleet_id
+    if String.trim(body) != "" do
+      case Hub.Messaging.Announcements.announce(fleet_id, "dashboard", scope, %{body: body, priority: priority}) do
+        {:ok, count} ->
+          case Hub.Messaging.Announcements.history(fleet_id) do
+            {:ok, anns} ->
+              {:noreply, assign(socket, announcements: anns, announcement_form: %{scope: "fleet", body: "", priority: "normal"}, toast: {:success, "Announcement sent to #{count} agents"})}
+            _ ->
+              {:noreply, assign(socket, announcement_form: %{scope: "fleet", body: "", priority: "normal"}, toast: {:success, "Announcement sent to #{count} agents"})}
+          end
+        {:denied, reason} ->
+          {:noreply, assign(socket, toast: {:error, "Denied: #{reason}"})}
+        {:error, reason} ->
+          {:noreply, assign(socket, toast: {:error, "Failed: #{inspect(reason)}"})}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Escalate from DM denial
+  def handle_event("escalate_from_dm", %{"target" => target_agent_id}, socket) do
+    fleet_id = socket.assigns.fleet_id
+    case Hub.Messaging.Escalation.create_escalation(fleet_id, "dashboard", "tech-lead", %{
+      subject: "DM access request to #{target_agent_id}",
+      body: "Dashboard user requested access to DM agent #{target_agent_id} but was denied by access control.",
+      priority: "normal"
+    }) do
+      {:ok, _esc} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, msg_access_result: nil, toast: {:success, "Escalation created"})}
+      {:error, reason} ->
+        {:noreply, assign(socket, toast: {:error, "Escalation failed: #{reason}"})}
+    end
+  end
+
+  # ── Agent Enhancement Events ────────────────────────────────
+
+  def handle_event("toggle_agent_role_edit", %{"agent-id" => _agent_id}, socket) do
+    roles = Hub.Roles.list_roles(socket.assigns.tenant_id)
+    {:noreply, assign(socket, agent_role_editing: !socket.assigns.agent_role_editing, available_roles: roles)}
+  end
+
+  def handle_event("toggle_agent_squad_edit", %{"agent-id" => _agent_id}, socket) do
+    squads = try do Hub.Fleets.list_squads(socket.assigns.fleet_id) rescue _ -> [] end
+    {:noreply, assign(socket, agent_squad_editing: !socket.assigns.agent_squad_editing, available_squads: squads)}
+  end
+
+  def handle_event("assign_agent_role", %{"agent-id" => agent_id, "role-id" => role_id}, socket) do
+    import Ecto.Query
+    case Hub.Repo.one(from(a in Hub.Auth.Agent, where: a.agent_id == ^agent_id and a.fleet_id == ^socket.assigns.fleet_id)) do
+      nil -> {:noreply, assign(socket, toast: {:error, "Agent not found"})}
+      agent ->
+        role_id_val = if role_id == "", do: nil, else: role_id
+        case Hub.Auth.Agent.changeset(agent, %{role_template_id: role_id_val}) |> Hub.Repo.update() do
+          {:ok, _} ->
+            registered = load_registered_agents_detail(socket.assigns.fleet_id)
+            {:noreply, assign(socket, registered_agents_detail: registered, agent_role_editing: false, toast: {:success, "Role assigned"})}
+          {:error, _} ->
+            {:noreply, assign(socket, toast: {:error, "Failed to assign role"})}
+        end
+    end
+  end
+
+  def handle_event("assign_agent_squad", %{"agent-id" => agent_id, "squad-id" => squad_id}, socket) do
+    import Ecto.Query
+    case Hub.Repo.one(from(a in Hub.Auth.Agent, where: a.agent_id == ^agent_id and a.fleet_id == ^socket.assigns.fleet_id)) do
+      nil -> {:noreply, assign(socket, toast: {:error, "Agent not found"})}
+      agent ->
+        squad_id_val = if squad_id == "", do: nil, else: squad_id
+        case Hub.Auth.Agent.changeset(agent, %{squad_id: squad_id_val}) |> Hub.Repo.update() do
+          {:ok, _} ->
+            registered = load_registered_agents_detail(socket.assigns.fleet_id)
+            {:noreply, assign(socket, registered_agents_detail: registered, agent_squad_editing: false, toast: {:success, "Squad assigned"})}
+          {:error, _} ->
+            {:noreply, assign(socket, toast: {:error, "Failed to assign squad"})}
+        end
+    end
   end
 
   # ── Fleet Management Events ─────────────────────────────────
@@ -939,12 +1203,16 @@ defmodule Hub.Live.DashboardLive do
           {:ok, h} -> h
           _ -> []
         end
+        task_artifacts = Hub.Artifacts.task_artifacts(task.task_id)
+        task_threads = Hub.Messaging.Threads.list_threads(socket.assigns.fleet_id, task_id: task.task_id)
         {:noreply, assign(socket,
           kanban_selected_task: task,
           kanban_detail_open: true,
           kanban_task_history: history,
           kanban_edit_mode: false,
-          kanban_progress_pct: task.progress_pct || 0
+          kanban_progress_pct: task.progress_pct || 0,
+          selected_task_artifacts: task_artifacts,
+          selected_task_threads: task_threads
         )}
       {:error, _} ->
         {:noreply, assign(socket, toast: {:error, "Task not found"})}
@@ -952,7 +1220,7 @@ defmodule Hub.Live.DashboardLive do
   end
 
   def handle_event("kanban_close_detail", _, socket) do
-    {:noreply, assign(socket, kanban_detail_open: false, kanban_selected_task: nil, kanban_edit_mode: false)}
+    {:noreply, assign(socket, kanban_detail_open: false, kanban_selected_task: nil, kanban_edit_mode: false, selected_task_artifacts: [], selected_task_threads: [])}
   end
 
   def handle_event("kanban_move_task", %{"task-id" => task_id, "lane" => lane}, socket) do
@@ -1441,6 +1709,27 @@ defmodule Hub.Live.DashboardLive do
     end
   end
 
+  # Kanban PubSub real-time handlers
+  def handle_info(%Phoenix.Socket.Broadcast{event: "kanban:task_created"}, socket) do
+    {:noreply, maybe_reload_kanban(socket)}
+  end
+
+  def handle_info(%Phoenix.Socket.Broadcast{event: "kanban:task_moved"}, socket) do
+    {:noreply, maybe_reload_kanban(socket)}
+  end
+
+  def handle_info(%Phoenix.Socket.Broadcast{event: "kanban:task_claimed"}, socket) do
+    {:noreply, maybe_reload_kanban(socket)}
+  end
+
+  def handle_info(%Phoenix.Socket.Broadcast{event: "kanban:task_updated"}, socket) do
+    {:noreply, maybe_reload_kanban(socket)}
+  end
+
+  def handle_info({:kanban_event, _event}, socket) do
+    {:noreply, maybe_reload_kanban(socket)}
+  end
+
   def handle_info(%Phoenix.Socket.Broadcast{}, socket), do: {:noreply, socket}
   def handle_info(_msg, socket), do: {:noreply, socket}
 
@@ -1873,12 +2162,45 @@ defmodule Hub.Live.DashboardLive do
     online = Enum.count(assigns.agents, fn {_, m} -> m[:state] == "online" end)
     msg_info = Map.get(assigns.usage, :messages_today, %{used: 0, limit: 0})
     mem_info = Map.get(assigns.usage, :memory_entries, %{used: 0, limit: 0})
-    tasks_today = try do Hub.Task.tasks_today() rescue _ -> 0 end
+
+    # Kanban-integrated stats
+    fleet_id = assigns.fleet_id
+    kanban_stats = try do Hub.Kanban.board_stats(fleet_id) rescue _ -> %{} end
+    lane_counts = kanban_stats["lanes"] || %{}
+    active_tasks = lane_counts["in_progress"] || 0
+    review_lane_count = lane_counts["review"] || 0
+    pending_artifacts = try do
+      Hub.Artifacts.list_artifacts(fleet_id, %{status: "pending_review"}) |> length()
+    rescue _ -> 0
+    end
+    pending_review = review_lane_count + pending_artifacts
+    velocity_day = kanban_stats["velocity_24h"] || 0
+    escalation_count = try do
+      # Count all pending escalations by listing for a sentinel — use all_escalations approach
+      Hub.Messaging.Escalation.list_pending(fleet_id, "dashboard") |> length()
+    rescue _ -> 0
+    end
+
+    # Role distribution
+    role_dist = try do
+      roles = Hub.Roles.list_roles(assigns.tenant_id)
+      role_map = Enum.into(roles, %{}, fn r -> {r.id, r.name} end)
+      # Count agents by role — query Agent schema directly
+      import Ecto.Query, only: [from: 2]
+      agent_list = Hub.Repo.all(from a in Hub.Auth.Agent, where: a.fleet_id == ^fleet_id)
+      Enum.reduce(agent_list, %{}, fn agent, acc ->
+        role_name = if agent.role_template_id, do: Map.get(role_map, agent.role_template_id, "Unknown"), else: "No Role"
+        Map.update(acc, role_name, 1, &(&1 + 1))
+      end)
+    rescue _ -> %{}
+    end
 
     assigns = assign(assigns,
       agents_sorted: agents_sorted, recent: recent,
       ov_online: online, msg_info: msg_info, mem_info: mem_info,
-      tasks_today: tasks_today
+      ov_active_tasks: active_tasks, ov_pending_review: pending_review,
+      ov_velocity_day: velocity_day, ov_escalation_count: escalation_count,
+      ov_lane_counts: lane_counts, ov_role_dist: role_dist
     )
 
     ~H"""
@@ -1889,12 +2211,13 @@ defmodule Hub.Live.DashboardLive do
       </div>
 
       <%!-- Stat cards --%>
-      <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      <div class="grid grid-cols-2 lg:grid-cols-6 gap-3">
         <Components.stat_card label="Total Agents" value={to_string(map_size(@agents))} icon={:bot} color="amber" />
         <Components.stat_card label="Online Now" value={to_string(@ov_online)} icon={:wifi} color="green" delta={"+" <> to_string(@ov_online)} delta_type={:positive} />
-        <Components.stat_card label="Messages Today" value={Components.fmt_num(@msg_info[:used] || 0)} icon={:message_square} color="blue" />
-        <Components.stat_card label="Tasks Today" value={to_string(@tasks_today)} icon={:layers} color="blue" />
-        <Components.stat_card label="Memory Used" value={to_string(Components.quota_pct(@mem_info)) <> "%"} icon={:brain} color="purple" />
+        <Components.stat_card label="Active Tasks" value={to_string(@ov_active_tasks)} icon={:layers} color="blue" />
+        <Components.stat_card label="Pending Review" value={to_string(@ov_pending_review)} icon={:message_square} color="yellow" />
+        <Components.stat_card label="Velocity/day" value={to_string(@ov_velocity_day)} icon={:layers} color="emerald" />
+        <Components.stat_card label="Escalations" value={to_string(@ov_escalation_count)} icon={:brain} color={if @ov_escalation_count > 0, do: "red", else: "purple"} />
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 lg-grid-sidebar">
@@ -1923,6 +2246,63 @@ defmodule Hub.Live.DashboardLive do
               <%= for {agent_id, meta} <- @agents_sorted do %>
                 <Components.agent_grid_card agent_id={agent_id} meta={meta} />
               <% end %>
+            </div>
+          <% end %>
+
+          <%!-- Kanban mini-summary --%>
+          <div class="mt-4">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="text-sm font-medium text-zinc-300">Kanban Summary</h3>
+              <.button variant="link" phx-click="navigate" phx-value-view="kanban" class="text-xs text-amber-400 hover:text-amber-300 p-0 h-auto">Board →</.button>
+            </div>
+            <.card class="bg-zinc-900 border-zinc-800">
+              <.card_content class="p-3">
+                <div class="flex items-center gap-2 flex-wrap text-xs">
+                  <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
+                    <span>📋</span>
+                    <span>Backlog: <span class="font-medium text-zinc-200"><%= @ov_lane_counts["backlog"] || 0 %></span></span>
+                  </button>
+                  <span class="text-zinc-700">|</span>
+                  <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
+                    <span>🟢</span>
+                    <span>Ready: <span class="font-medium text-green-400"><%= @ov_lane_counts["ready"] || 0 %></span></span>
+                  </button>
+                  <span class="text-zinc-700">|</span>
+                  <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
+                    <span>🔵</span>
+                    <span>Active: <span class="font-medium text-blue-400"><%= @ov_lane_counts["in_progress"] || 0 %></span></span>
+                  </button>
+                  <span class="text-zinc-700">|</span>
+                  <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
+                    <span>🟡</span>
+                    <span>Review: <span class="font-medium text-yellow-400"><%= @ov_lane_counts["review"] || 0 %></span></span>
+                  </button>
+                  <span class="text-zinc-700">|</span>
+                  <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
+                    <span>✅</span>
+                    <span>Done: <span class="font-medium text-emerald-400"><%= @ov_lane_counts["done"] || 0 %></span></span>
+                  </button>
+                </div>
+              </.card_content>
+            </.card>
+          </div>
+
+          <%!-- Role Distribution --%>
+          <%= if @ov_role_dist != %{} do %>
+            <div class="mt-4">
+              <h3 class="text-sm font-medium text-zinc-300 mb-2">Role Distribution</h3>
+              <.card class="bg-zinc-900 border-zinc-800">
+                <.card_content class="p-3">
+                  <div class="flex items-center gap-2 flex-wrap text-xs text-zinc-400">
+                    <%= for {role_name, count} <- Enum.sort_by(@ov_role_dist, fn {_, c} -> -c end) do %>
+                      <span class="px-2 py-1 rounded-md bg-zinc-800/50">
+                        <span class="text-zinc-200 font-medium"><%= role_name %></span>
+                        <span class="text-zinc-500">(<%= count %>)</span>
+                      </span>
+                    <% end %>
+                  </div>
+                </.card_content>
+              </.card>
             </div>
           <% end %>
         </div>
@@ -2735,6 +3115,20 @@ defmodule Hub.Live.DashboardLive do
       assigns.agents
     end
 
+    # Build detail lookup from registered_agents_detail
+    detail_map = Map.new(assigns.registered_agents_detail, fn a ->
+      role_name = case a.role_template do
+        %{name: n} when is_binary(n) -> n
+        _ -> nil
+      end
+      squad_name = case a.squad do
+        %{name: n} when is_binary(n) -> n
+        _ -> nil
+      end
+      tier = try do tier_for_agent(a) rescue _ -> 4 end
+      {a.agent_id, %{role_name: role_name, squad_name: squad_name, tier: tier, role_template_id: a.role_template_id, squad_id: a.squad_id}}
+    end)
+
     list = all_agents
       |> Enum.map(fn {id, m} -> {id, m} end)
       |> filter_agents(assigns.search_query)
@@ -2743,7 +3137,7 @@ defmodule Hub.Live.DashboardLive do
     online_count = Enum.count(assigns.agents, fn {_,m} -> m[:state] == "online" end)
     total_registered = length(assigns.registered_agents)
 
-    assigns = assign(assigns, agents_list: list, agents_online: online_count, total_registered: total_registered)
+    assigns = assign(assigns, agents_list: list, agents_online: online_count, total_registered: total_registered, detail_map: detail_map)
 
     ~H"""
     <div class="h-full flex animate-fade-in">
@@ -2809,9 +3203,10 @@ defmodule Hub.Live.DashboardLive do
                       </button>
                     </.table_head>
                   <% end %>
-                  <.table_head><span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Capabilities</span></.table_head>
+                  <.table_head><span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Role</span></.table_head>
+                  <.table_head><span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Squad</span></.table_head>
+                  <.table_head><span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Tier</span></.table_head>
                   <.table_head><span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Task</span></.table_head>
-                  <.table_head><span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Connected</span></.table_head>
                   <.table_head>
                     <button phx-click="sort_agents" phx-value-column="framework" class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider hover:text-zinc-300 transition-colors flex items-center gap-1">
                       Framework <%= sort_arrow(@sort_by, @sort_dir, :framework) %>
@@ -2821,7 +3216,56 @@ defmodule Hub.Live.DashboardLive do
               </.table_header>
               <.table_body>
                 <%= for {id, meta} <- @agents_list do %>
-                  <Components.agent_table_row agent_id={id} meta={meta} selected={@selected_agent == id} />
+                  <% detail = Map.get(@detail_map, id, %{}) %>
+                  <.table_row
+                    phx-click={JS.push("select_agent_detail", value: %{"agent-id" => id}) |> JS.exec("phx-show-sheet", to: "#agent-detail-sheet")}
+                    class={"cursor-pointer transition-colors duration-150 " <> if(@selected_agent == id, do: "bg-amber-500/5", else: "hover:bg-zinc-800/50")}
+                  >
+                    <.table_cell>
+                      <div class="flex items-center gap-2.5">
+                        <div class={"w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold " <> Components.avatar_bg(meta[:state])}>
+                          <%= Components.avatar_initial(meta[:name] || id) %>
+                        </div>
+                        <div>
+                          <div class="text-sm font-medium text-zinc-200"><%= meta[:name] || id %></div>
+                          <div class="text-[10px] text-zinc-600 font-mono truncate max-w-[140px]"><%= id %></div>
+                        </div>
+                      </div>
+                    </.table_cell>
+                    <.table_cell>
+                      <div class="flex items-center gap-1.5">
+                        <span class={"w-2 h-2 rounded-full " <> Components.state_dot(meta[:state]) <> if(meta[:state] in ["online", "busy"], do: " animate-pulse-dot", else: "")}></span>
+                        <.badge variant="outline" class={"text-[10px] " <> Components.state_badge(meta[:state])}><%= meta[:state] || "unknown" %></.badge>
+                      </div>
+                    </.table_cell>
+                    <.table_cell>
+                      <%= if detail[:role_name] do %>
+                        <.badge variant="outline" class="text-[10px] px-1.5 py-0.5 bg-indigo-500/10 text-indigo-400 border-indigo-500/15"><%= detail[:role_name] %></.badge>
+                      <% else %>
+                        <span class="text-[10px] text-zinc-600 italic">No role</span>
+                      <% end %>
+                    </.table_cell>
+                    <.table_cell>
+                      <%= if detail[:squad_name] do %>
+                        <.badge variant="outline" class="text-[10px] px-1.5 py-0.5 bg-cyan-500/10 text-cyan-400 border-cyan-500/15"><%= detail[:squad_name] %></.badge>
+                      <% else %>
+                        <span class="text-[10px] text-zinc-600 italic">Unassigned</span>
+                      <% end %>
+                    </.table_cell>
+                    <.table_cell>
+                      <%= if detail[:tier] do %>
+                        <span class={"text-[9px] px-1.5 py-0.5 rounded font-bold border " <> tier_badge_class(detail[:tier])}>T<%= detail[:tier] %></span>
+                      <% else %>
+                        <span class="text-[10px] text-zinc-600">—</span>
+                      <% end %>
+                    </.table_cell>
+                    <.table_cell>
+                      <span class="text-xs text-zinc-400 truncate block max-w-[180px]"><%= meta[:task] || "—" %></span>
+                    </.table_cell>
+                    <.table_cell>
+                      <span class="text-xs text-zinc-400"><%= meta[:framework] || "—" %></span>
+                    </.table_cell>
+                  </.table_row>
                 <% end %>
               </.table_body>
             </.table>
@@ -2834,7 +3278,8 @@ defmodule Hub.Live.DashboardLive do
         <.sheet_content id="agent-detail-sheet" side="right" class="bg-zinc-900 border-zinc-800 p-0">
           <%= if @selected_agent do %>
             <% dm = Map.get(@agents, @selected_agent, %{}) %>
-            <div class="p-5 space-y-5">
+            <% agent_detail = Map.get(@detail_map, @selected_agent, %{}) %>
+            <div class="p-5 space-y-5 overflow-y-auto max-h-screen">
               <.sheet_header>
                 <.sheet_title class="text-sm font-medium text-zinc-200">Agent Detail</.sheet_title>
                 <.sheet_description class="text-xs text-zinc-500">Inspect agent state and activity</.sheet_description>
@@ -2847,7 +3292,12 @@ defmodule Hub.Live.DashboardLive do
                       <%= Components.avatar_initial(dm[:name] || @selected_agent) %>
                     </div>
                     <div>
-                      <div class="text-sm font-semibold text-zinc-100"><%= dm[:name] || @selected_agent %></div>
+                      <div class="flex items-center gap-2">
+                        <span class="text-sm font-semibold text-zinc-100"><%= dm[:name] || @selected_agent %></span>
+                        <%= if agent_detail[:tier] do %>
+                          <span class={"text-[9px] px-1.5 py-0.5 rounded font-bold border " <> tier_badge_class(agent_detail[:tier])}>T<%= agent_detail[:tier] %></span>
+                        <% end %>
+                      </div>
                       <div class="flex items-center gap-1.5">
                         <span class={"w-2 h-2 rounded-full " <> Components.state_dot(dm[:state])}></span>
                         <.badge variant="outline" class={"text-[10px] " <> Components.state_badge(dm[:state])}><%= dm[:state] || "unknown" %></.badge>
@@ -2871,6 +3321,89 @@ defmodule Hub.Live.DashboardLive do
                   </div>
                 </.card_content>
               </.card>
+
+              <%!-- Role Section --%>
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Role</span>
+                  <button phx-click="toggle_agent_role_edit" phx-value-agent-id={@selected_agent}
+                    class="text-[10px] text-amber-400 hover:text-amber-300">
+                    <%= if @agent_role_editing, do: "Cancel", else: "Change" %>
+                  </button>
+                </div>
+                <%= if @agent_role_editing do %>
+                  <div class="space-y-1">
+                    <%= for role <- @available_roles do %>
+                      <button phx-click="assign_agent_role" phx-value-agent-id={@selected_agent} phx-value-role-id={role.id}
+                        class={"w-full text-left px-2.5 py-1.5 rounded text-xs transition-colors " <>
+                          if(agent_detail[:role_template_id] == role.id, do: "bg-indigo-500/15 text-indigo-400", else: "text-zinc-400 hover:bg-zinc-800")}>
+                        <%= role.name %>
+                      </button>
+                    <% end %>
+                    <button phx-click="assign_agent_role" phx-value-agent-id={@selected_agent} phx-value-role-id=""
+                      class="w-full text-left px-2.5 py-1.5 rounded text-xs text-zinc-600 hover:bg-zinc-800">
+                      Remove role
+                    </button>
+                  </div>
+                <% else %>
+                  <%= if agent_detail[:role_name] do %>
+                    <.badge variant="outline" class="text-[10px] px-2 py-0.5 bg-indigo-500/10 text-indigo-400 border-indigo-500/15"><%= agent_detail[:role_name] %></.badge>
+                  <% else %>
+                    <span class="text-xs text-zinc-600 italic">No role assigned</span>
+                  <% end %>
+                <% end %>
+              </div>
+
+              <%!-- Squad Section --%>
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Squad</span>
+                  <button phx-click="toggle_agent_squad_edit" phx-value-agent-id={@selected_agent}
+                    class="text-[10px] text-amber-400 hover:text-amber-300">
+                    <%= if @agent_squad_editing, do: "Cancel", else: "Change" %>
+                  </button>
+                </div>
+                <%= if @agent_squad_editing do %>
+                  <div class="space-y-1">
+                    <%= for squad <- @available_squads do %>
+                      <button phx-click="assign_agent_squad" phx-value-agent-id={@selected_agent} phx-value-squad-id={squad.id}
+                        class={"w-full text-left px-2.5 py-1.5 rounded text-xs transition-colors " <>
+                          if(agent_detail[:squad_id] == squad.id, do: "bg-cyan-500/15 text-cyan-400", else: "text-zinc-400 hover:bg-zinc-800")}>
+                        <%= squad.name %>
+                      </button>
+                    <% end %>
+                    <button phx-click="assign_agent_squad" phx-value-agent-id={@selected_agent} phx-value-squad-id=""
+                      class="w-full text-left px-2.5 py-1.5 rounded text-xs text-zinc-600 hover:bg-zinc-800">
+                      Remove from squad
+                    </button>
+                  </div>
+                <% else %>
+                  <%= if agent_detail[:squad_name] do %>
+                    <.badge variant="outline" class="text-[10px] px-2 py-0.5 bg-cyan-500/10 text-cyan-400 border-cyan-500/15"><%= agent_detail[:squad_name] %></.badge>
+                  <% else %>
+                    <span class="text-xs text-zinc-600 italic">Unassigned</span>
+                  <% end %>
+                <% end %>
+              </div>
+
+              <%!-- Active Kanban Tasks --%>
+              <div>
+                <div class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">Active Tasks</div>
+                <%= if @agent_kanban_tasks == [] do %>
+                  <p class="text-xs text-zinc-600 italic">No active tasks</p>
+                <% else %>
+                  <div class="space-y-1">
+                    <%= for task <- @agent_kanban_tasks do %>
+                      <div class="flex items-center gap-2 px-2 py-1.5 rounded bg-zinc-800/50 text-xs">
+                        <span class="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 font-mono">
+                          T-<%= String.slice(task.task_id || "", 0..5) %>
+                        </span>
+                        <span class="text-zinc-300 truncate flex-1"><%= task.title %></span>
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
+              </div>
 
               <%!-- Capabilities --%>
               <div>
@@ -3372,6 +3905,75 @@ defmodule Hub.Live.DashboardLive do
                 </div>
               <% end %>
 
+              <%!-- Artifacts --%>
+              <%= if @selected_task_artifacts != [] do %>
+                <div>
+                  <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 block">📁 Artifacts</label>
+                  <div class="space-y-1.5">
+                    <%= for artifact <- @selected_task_artifacts do %>
+                      <div class="flex items-center gap-2 py-1.5 px-2 rounded-md bg-zinc-800/30">
+                        <span class={
+                          case artifact.status do
+                            "approved" -> "text-green-400 text-xs"
+                            "rejected" -> "text-red-400 text-xs"
+                            _ -> "text-yellow-400 text-xs"
+                          end
+                        }>
+                          <%= case artifact.status do
+                            "approved" -> "✅"
+                            "rejected" -> "❌"
+                            _ -> "🟡"
+                          end %>
+                        </span>
+                        <div class="flex-1 min-w-0">
+                          <div class="flex items-center gap-1.5">
+                            <span class="text-xs text-zinc-200 font-medium truncate"><%= artifact.filename %></span>
+                            <span class="text-[10px] text-zinc-500">(v<%= artifact.version %>)</span>
+                          </div>
+                          <div class="text-[10px] text-zinc-500">
+                            <%= artifact.status %> · by <%= artifact.created_by || "—" %>
+                            <%= if artifact.size do %>
+                              · <%= format_file_size(artifact.size) %>
+                            <% end %>
+                          </div>
+                        </div>
+                        <.badge variant="outline" class={
+                          case artifact.status do
+                            "approved" -> "text-[9px] bg-green-500/10 text-green-400 border-green-500/20"
+                            "rejected" -> "text-[9px] bg-red-500/10 text-red-400 border-red-500/20"
+                            _ -> "text-[9px] bg-yellow-500/10 text-yellow-400 border-yellow-500/20"
+                          end
+                        }><%= artifact.status %></.badge>
+                      </div>
+                    <% end %>
+                  </div>
+                  <div class="mt-2">
+                    <.button variant="outline" size="sm" disabled class="h-7 text-[10px] border-zinc-700 text-zinc-600 cursor-not-allowed opacity-50">
+                      Upload Artifact (agents only)
+                    </.button>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Linked Threads --%>
+              <%= if @selected_task_threads != [] do %>
+                <div>
+                  <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 block">💬 Discussion (<%= Enum.reduce(@selected_task_threads, 0, fn t, acc -> acc + (t.message_count || 0) end) %> messages)</label>
+                  <div class="space-y-1.5">
+                    <%= for thread <- @selected_task_threads do %>
+                      <div class="flex items-center gap-2 py-1.5 px-2 rounded-md bg-zinc-800/30 cursor-pointer hover:bg-zinc-800/50 transition-colors"
+                           phx-click="navigate" phx-value-view="messaging">
+                        <span class={"w-1.5 h-1.5 rounded-full shrink-0 " <> if(thread.status == "open", do: "bg-green-400", else: "bg-zinc-600")}></span>
+                        <div class="flex-1 min-w-0">
+                          <span class="text-xs text-zinc-200 truncate block"><%= thread.subject || "Thread" %></span>
+                          <span class="text-[10px] text-zinc-500"><%= thread.message_count || 0 %> messages · <%= thread.status %></span>
+                        </div>
+                      </div>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
               <%!-- Tags --%>
               <%= if (task.tags || []) != [] do %>
                 <div>
@@ -3657,6 +4259,11 @@ defmodule Hub.Live.DashboardLive do
   defp effort_style("epic"), do: "bg-red-500/10 text-red-400"
   defp effort_style(_), do: "bg-zinc-800 text-zinc-500"
 
+  defp format_file_size(nil), do: "—"
+  defp format_file_size(bytes) when bytes < 1024, do: "#{bytes} B"
+  defp format_file_size(bytes) when bytes < 1024 * 1024, do: "#{Float.round(bytes / 1024, 1)} KB"
+  defp format_file_size(bytes), do: "#{Float.round(bytes / (1024 * 1024), 1)} MB"
+
   defp lane_badge_style("backlog"), do: "bg-zinc-800/50 text-zinc-400 border-zinc-700"
   defp lane_badge_style("ready"), do: "bg-green-500/10 text-green-400 border-green-500/20"
   defp lane_badge_style("in_progress"), do: "bg-blue-500/10 text-blue-400 border-blue-500/20"
@@ -3698,83 +4305,450 @@ defmodule Hub.Live.DashboardLive do
     agents_sorted = assigns.agents
       |> Enum.sort_by(fn {_, m} -> Components.state_sort_order(m[:state]) end)
 
-    assigns = assign(assigns, agents_sorted: agents_sorted)
+    # Build tier map from registered_agents_detail
+    tier_map = Map.new(assigns.registered_agents_detail, fn a ->
+      {a.agent_id, tier_for_agent(a)}
+    end)
+
+    assigns = assign(assigns, agents_sorted: agents_sorted, tier_map: tier_map)
 
     ~H"""
-    <div class="h-full flex animate-fade-in">
-      <%!-- Agent list --%>
-      <div class="w-56 border-r border-zinc-800 overflow-y-auto shrink-0 bg-zinc-900">
-        <div class="p-3">
-          <div class="px-2 py-2 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Agents</div>
-          <%= if map_size(@agents) == 0 do %>
-            <p class="px-2 py-3 text-xs text-zinc-600">No agents online</p>
-          <% else %>
-            <%= for {id, m} <- @agents_sorted do %>
-              <button phx-click="select_msg_agent" phx-value-agent-id={id}
-                class={"w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-colors duration-150 " <> if(@msg_to == id, do: "bg-zinc-800", else: "hover:bg-zinc-800/50")}>
-                <span class={"w-1.5 h-1.5 rounded-full " <> Components.state_dot(m[:state])}></span>
-                <div class="min-w-0 flex-1">
-                  <div class="text-sm text-zinc-200 truncate"><%= m[:name] || id %></div>
-                  <div class="text-[10px] text-zinc-600"><%= m[:state] %></div>
-                </div>
-              </button>
-            <% end %>
+    <div class="h-full flex flex-col animate-fade-in">
+      <%!-- Tabs --%>
+      <div class="px-4 pt-3 pb-0 border-b border-zinc-800 shrink-0">
+        <div class="flex gap-1">
+          <%= for {tab, label, icon} <- [{"dms", "DMs", :message_square}, {"threads", "Threads", :layers}, {"escalations", "Escalations", :alert_triangle}, {"announcements", "Announcements", :radio}] do %>
+            <button phx-click="switch_messaging_tab" phx-value-tab={tab}
+              class={"px-3 py-2 text-xs font-medium rounded-t-lg transition-colors " <>
+                if(@messaging_tab == tab,
+                  do: "bg-zinc-800 text-amber-400 border-b-2 border-amber-500",
+                  else: "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50")}>
+              <%= label %>
+            </button>
           <% end %>
         </div>
       </div>
 
-      <%!-- Conversation --%>
-      <div class="flex-1 flex flex-col min-w-0">
-        <%= if @msg_to do %>
-          <% am = Map.get(@agents, @msg_to, %{name: @msg_to}) %>
-          <div class="px-4 py-3 border-b border-zinc-800 shrink-0 flex items-center gap-2.5">
-            <div class={"w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold " <> Components.avatar_bg(am[:state])}>
-              <%= Components.avatar_initial(am[:name] || @msg_to) %>
-            </div>
-            <div>
-              <div class="text-sm font-medium text-zinc-200"><%= am[:name] || @msg_to %></div>
-              <div class="text-[10px] text-zinc-500"><%= am[:state] || "offline" %></div>
-            </div>
-          </div>
-
-          <div class="flex-1 overflow-y-auto px-4 py-4" id="msg-thread" phx-hook="ScrollBottom">
-            <%= if @messages == [] do %>
-              <div class="flex flex-col items-center justify-center h-full text-center">
-                <div class="w-12 h-12 rounded-2xl bg-zinc-800 flex items-center justify-center mb-3">
-                  <Icons.message_square class="w-5 h-5 text-zinc-600" />
+      <%!-- Tab content --%>
+      <div class="flex-1 overflow-hidden">
+        <%= case @messaging_tab do %>
+          <% "dms" -> %>
+            <%!-- DMs tab — upgraded --%>
+            <div class="h-full flex">
+              <%!-- Agent list --%>
+              <div class="w-56 border-r border-zinc-800 overflow-y-auto shrink-0 bg-zinc-900">
+                <div class="p-3">
+                  <div class="px-2 py-2 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Agents</div>
+                  <%= if map_size(@agents) == 0 do %>
+                    <p class="px-2 py-3 text-xs text-zinc-600">No agents online</p>
+                  <% else %>
+                    <%= for {id, m} <- @agents_sorted do %>
+                      <button phx-click="select_msg_agent" phx-value-agent-id={id}
+                        class={"w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-colors duration-150 " <> if(@msg_to == id, do: "bg-zinc-800", else: "hover:bg-zinc-800/50")}>
+                        <span class={"w-1.5 h-1.5 rounded-full " <> Components.state_dot(m[:state])}></span>
+                        <div class="min-w-0 flex-1">
+                          <div class="flex items-center gap-1.5">
+                            <span class="text-sm text-zinc-200 truncate"><%= m[:name] || id %></span>
+                            <% agent_tier = Map.get(@tier_map, id) %>
+                            <%= if agent_tier do %>
+                              <span class={"text-[9px] px-1 py-0.5 rounded font-bold border " <> tier_badge_class(agent_tier)}>T<%= agent_tier %></span>
+                            <% end %>
+                          </div>
+                          <div class="text-[10px] text-zinc-600"><%= m[:state] %></div>
+                        </div>
+                        <%!-- Unread dot --%>
+                        <span class="w-2 h-2 rounded-full bg-amber-500 opacity-0"></span>
+                      </button>
+                    <% end %>
+                  <% end %>
                 </div>
-                <p class="text-sm text-zinc-500">No messages yet</p>
-                <p class="text-xs text-zinc-600 mt-0.5">Send the first message below</p>
               </div>
-            <% else %>
-              <%= for msg <- @messages do %>
-                <Components.message_bubble msg={msg} />
-              <% end %>
-            <% end %>
-          </div>
 
-          <div class="px-4 py-3 border-t border-zinc-800 shrink-0">
-            <form phx-submit="send_message" class="flex gap-2">
-              <input type="hidden" name="to" value={@msg_to} />
-              <.input type="text" name="body" value={@msg_body} phx-keyup="update_msg_body"
-                placeholder={"Message " <> (am[:name] || @msg_to) <> "..."} autocomplete="off"
-                class="flex-1 bg-zinc-900 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600" />
-              <.button type="submit"
-                class="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs shrink-0">
-                <Icons.send class="w-3.5 h-3.5 mr-1" /> Send
-              </.button>
-            </form>
-          </div>
-        <% else %>
-          <div class="flex-1 flex items-center justify-center">
-            <div class="text-center">
-              <div class="w-14 h-14 rounded-2xl bg-zinc-800 flex items-center justify-center mb-4 mx-auto">
-                <Icons.message_square class="w-6 h-6 text-zinc-600" />
+              <%!-- Conversation --%>
+              <div class="flex-1 flex flex-col min-w-0">
+                <%= if @msg_to do %>
+                  <% am = Map.get(@agents, @msg_to, %{name: @msg_to}) %>
+                  <% target_tier = Map.get(@tier_map, @msg_to) %>
+                  <div class="px-4 py-3 border-b border-zinc-800 shrink-0 flex items-center gap-2.5">
+                    <div class={"w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold " <> Components.avatar_bg(am[:state])}>
+                      <%= Components.avatar_initial(am[:name] || @msg_to) %>
+                    </div>
+                    <div>
+                      <div class="flex items-center gap-2">
+                        <span class="text-sm font-medium text-zinc-200"><%= am[:name] || @msg_to %></span>
+                        <%= if target_tier do %>
+                          <span class={"text-[9px] px-1.5 py-0.5 rounded font-bold border " <> tier_badge_class(target_tier)}>Tier <%= target_tier %></span>
+                        <% end %>
+                      </div>
+                      <div class="text-[10px] text-zinc-500"><%= am[:state] || "offline" %></div>
+                    </div>
+                  </div>
+
+                  <%!-- Access control denial banner --%>
+                  <%= if @msg_access_result do %>
+                    <div class="mx-4 mt-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+                      <div class="flex items-start gap-2">
+                        <Icons.shield class="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                        <div class="flex-1">
+                          <div class="text-xs font-medium text-red-400">Access Denied</div>
+                          <div class="text-xs text-red-300/70 mt-0.5"><%= elem(@msg_access_result, 0) %></div>
+                          <% suggestion = elem(@msg_access_result, 1) %>
+                          <%= if suggestion[:suggestion] do %>
+                            <div class="text-[10px] text-zinc-400 mt-1">💡 <%= suggestion[:suggestion] || suggestion["suggestion"] %></div>
+                          <% end %>
+                          <button phx-click="escalate_from_dm" phx-value-target={@msg_to}
+                            class="mt-2 text-[10px] px-2.5 py-1 rounded bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors">
+                            ↗ Escalate
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  <% end %>
+
+                  <div class="flex-1 overflow-y-auto px-4 py-4" id="msg-thread" phx-hook="ScrollBottom">
+                    <%= if @messages == [] do %>
+                      <div class="flex flex-col items-center justify-center h-full text-center">
+                        <div class="w-12 h-12 rounded-2xl bg-zinc-800 flex items-center justify-center mb-3">
+                          <Icons.message_square class="w-5 h-5 text-zinc-600" />
+                        </div>
+                        <p class="text-sm text-zinc-500">No messages yet</p>
+                        <p class="text-xs text-zinc-600 mt-0.5">Send the first message below</p>
+                      </div>
+                    <% else %>
+                      <%= for msg <- @messages do %>
+                        <Components.message_bubble msg={msg} />
+                      <% end %>
+                    <% end %>
+                  </div>
+
+                  <div class="px-4 py-3 border-t border-zinc-800 shrink-0">
+                    <form phx-submit="send_message" class="flex gap-2">
+                      <input type="hidden" name="to" value={@msg_to} />
+                      <.input type="text" name="body" value={@msg_body} phx-keyup="update_msg_body"
+                        placeholder={"Message " <> (am[:name] || @msg_to) <> "..."} autocomplete="off"
+                        class="flex-1 bg-zinc-900 border-zinc-800 text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600" />
+                      <.button type="submit"
+                        class="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs shrink-0">
+                        <Icons.send class="w-3.5 h-3.5 mr-1" /> Send
+                      </.button>
+                    </form>
+                  </div>
+                <% else %>
+                  <div class="flex-1 flex items-center justify-center">
+                    <div class="text-center">
+                      <div class="w-14 h-14 rounded-2xl bg-zinc-800 flex items-center justify-center mb-4 mx-auto">
+                        <Icons.message_square class="w-6 h-6 text-zinc-600" />
+                      </div>
+                      <p class="font-medium text-zinc-400">Select an agent</p>
+                      <p class="text-sm text-zinc-500 mt-1">Choose from the list to start messaging</p>
+                    </div>
+                  </div>
+                <% end %>
               </div>
-              <p class="font-medium text-zinc-400">Select an agent</p>
-              <p class="text-sm text-zinc-500 mt-1">Choose from the list to start messaging</p>
             </div>
-          </div>
+
+          <% "threads" -> %>
+            <%!-- Threads tab --%>
+            <div class="h-full flex">
+              <%!-- Thread list --%>
+              <div class="w-72 border-r border-zinc-800 overflow-y-auto shrink-0 bg-zinc-900">
+                <div class="p-3">
+                  <div class="flex items-center justify-between px-2 py-2">
+                    <span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Threads</span>
+                    <button phx-click={JS.toggle(to: "#new-thread-form")}
+                      class="text-[10px] px-2 py-1 rounded bg-amber-500/15 text-amber-400 hover:bg-amber-500/25">
+                      + New Thread
+                    </button>
+                  </div>
+
+                  <%!-- New thread form (hidden by default) --%>
+                  <div id="new-thread-form" class="hidden px-2 pb-3">
+                    <form phx-submit="create_thread" class="space-y-2">
+                      <input type="text" name="subject" placeholder="Subject..." required
+                        class="w-full h-8 px-2 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 focus:border-amber-500/50" />
+                      <select name="scope" class="w-full h-8 px-2 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200">
+                        <option value="dm">DM</option>
+                        <option value="squad">Squad</option>
+                        <option value="task">Task</option>
+                      </select>
+                      <.button type="submit" class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs h-8">
+                        Create Thread
+                      </.button>
+                    </form>
+                  </div>
+
+                  <%= if @threads == [] do %>
+                    <p class="px-2 py-3 text-xs text-zinc-600">No open threads</p>
+                  <% else %>
+                    <%= for thread <- @threads do %>
+                      <button phx-click="select_thread" phx-value-thread-id={thread.thread_id}
+                        class={"w-full text-left px-3 py-2.5 rounded-lg transition-colors mb-1 " <>
+                          if(@selected_thread == thread.thread_id, do: "bg-zinc-800", else: "hover:bg-zinc-800/50")}>
+                        <div class="flex items-center gap-2 mb-1">
+                          <span class="text-sm text-zinc-200 truncate flex-1"><%= thread.subject %></span>
+                          <span class={"text-[9px] px-1.5 py-0.5 rounded font-medium " <>
+                            case thread.scope do
+                              "dm" -> "bg-blue-500/15 text-blue-400"
+                              "squad" -> "bg-green-500/15 text-green-400"
+                              "task" -> "bg-purple-500/15 text-purple-400"
+                              _ -> "bg-zinc-700 text-zinc-400"
+                            end}><%= thread.scope %></span>
+                        </div>
+                        <div class="flex items-center gap-3 text-[10px] text-zinc-500">
+                          <span><%= length(thread.participant_ids) %> participants</span>
+                          <span><%= thread.message_count %> msgs</span>
+                          <span class={"font-medium " <> if(thread.status == "open", do: "text-emerald-400", else: "text-zinc-600")}><%= thread.status %></span>
+                        </div>
+                        <%= if thread.task_id do %>
+                          <div class="mt-1">
+                            <span class="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                              T-<%= String.slice(thread.task_id, 0..7) %>
+                            </span>
+                          </div>
+                        <% end %>
+                      </button>
+                    <% end %>
+                  <% end %>
+                </div>
+              </div>
+
+              <%!-- Thread messages --%>
+              <div class="flex-1 flex flex-col min-w-0">
+                <%= if @selected_thread do %>
+                  <div class="px-4 py-3 border-b border-zinc-800 shrink-0 flex items-center justify-between">
+                    <div>
+                      <% sel_thread = Enum.find(@threads, fn t -> t.thread_id == @selected_thread end) %>
+                      <div class="text-sm font-medium text-zinc-200"><%= if sel_thread, do: sel_thread.subject, else: @selected_thread %></div>
+                      <div class="text-[10px] text-zinc-500"><%= @selected_thread %></div>
+                    </div>
+                    <button phx-click="close_thread" phx-value-thread-id={@selected_thread}
+                      data-confirm="Close this thread?"
+                      class="text-[10px] px-2.5 py-1 rounded border border-zinc-700 text-zinc-400 hover:text-red-400 hover:border-red-500/30">
+                      Close Thread
+                    </button>
+                  </div>
+
+                  <div class="flex-1 overflow-y-auto px-4 py-4" id="thread-msgs" phx-hook="ScrollBottom">
+                    <%= if @thread_messages == [] do %>
+                      <div class="flex flex-col items-center justify-center h-full text-center">
+                        <p class="text-sm text-zinc-500">No messages in thread</p>
+                      </div>
+                    <% else %>
+                      <%= for msg <- @thread_messages do %>
+                        <div class="mb-3">
+                          <div class="flex items-center gap-2 mb-0.5">
+                            <span class="text-xs font-medium text-zinc-300"><%= msg["from"] %></span>
+                            <span class="text-[10px] text-zinc-600"><%= msg["timestamp"] %></span>
+                          </div>
+                          <div class="text-sm text-zinc-400 pl-0"><%= msg["body"] %></div>
+                        </div>
+                      <% end %>
+                    <% end %>
+                  </div>
+
+                  <div class="px-4 py-3 border-t border-zinc-800 shrink-0">
+                    <form phx-submit="send_thread_message" class="flex gap-2">
+                      <.input type="text" name="body" value="" placeholder="Reply to thread..." autocomplete="off"
+                        class="flex-1 bg-zinc-900 border-zinc-800 text-zinc-100 placeholder:text-zinc-600" />
+                      <.button type="submit" class="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs shrink-0">
+                        <Icons.send class="w-3.5 h-3.5 mr-1" /> Reply
+                      </.button>
+                    </form>
+                  </div>
+                <% else %>
+                  <div class="flex-1 flex items-center justify-center">
+                    <div class="text-center">
+                      <Icons.layers class="w-6 h-6 text-zinc-600 mx-auto mb-3" />
+                      <p class="font-medium text-zinc-400">Select a thread</p>
+                      <p class="text-sm text-zinc-500 mt-1">Or create a new one</p>
+                    </div>
+                  </div>
+                <% end %>
+              </div>
+            </div>
+
+          <% "escalations" -> %>
+            <%!-- Escalations tab --%>
+            <div class="h-full overflow-y-auto p-4">
+              <div class="max-w-3xl mx-auto">
+                <%= if @escalations == [] do %>
+                  <div class="flex flex-col items-center justify-center py-16">
+                    <Icons.shield class="w-8 h-8 text-zinc-600 mb-3" />
+                    <p class="text-sm text-zinc-500">No pending escalations</p>
+                  </div>
+                <% else %>
+                  <div class="space-y-3">
+                    <%= for esc <- @escalations do %>
+                      <div class="p-4 rounded-lg bg-zinc-900 border border-zinc-800">
+                        <div class="flex items-start justify-between mb-2">
+                          <div>
+                            <div class="flex items-center gap-2">
+                              <span class="text-sm font-medium text-zinc-200"><%= esc.subject || "Escalation" %></span>
+                              <span class={"text-[9px] px-1.5 py-0.5 rounded font-bold " <>
+                                case esc.priority do
+                                  "critical" -> "bg-red-500/15 text-red-400"
+                                  "high" -> "bg-orange-500/15 text-orange-400"
+                                  "normal" -> "bg-blue-500/15 text-blue-400"
+                                  _ -> "bg-zinc-700 text-zinc-400"
+                                end}><%= esc.priority %></span>
+                            </div>
+                            <div class="text-[10px] text-zinc-500 mt-0.5">
+                              From: <span class="text-zinc-400"><%= esc.from_agent %></span>
+                              → Target role: <span class="text-zinc-400"><%= esc.target_role %></span>
+                            </div>
+                          </div>
+                          <span class="text-[10px] text-zinc-600"><%= esc.created_at %></span>
+                        </div>
+
+                        <div class="text-xs text-zinc-400 mb-3 p-2 rounded bg-zinc-800/50"><%= esc.body %></div>
+
+                        <%!-- Action buttons --%>
+                        <%= if @escalation_action_id == esc.id do %>
+                          <%= case @escalation_action do %>
+                            <% "forward" -> %>
+                              <div class="space-y-2 p-2 rounded bg-zinc-800/30 border border-zinc-700/50">
+                                <div class="text-[10px] font-medium text-zinc-400">Forward to agent:</div>
+                                <select phx-change="escalation_forward_select" name="agent"
+                                  class="w-full h-8 px-2 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200">
+                                  <option value="">Select agent...</option>
+                                  <%= for {id, m} <- @agents do %>
+                                    <option value={id} selected={@escalation_forward_to == id}><%= m[:name] || id %></option>
+                                  <% end %>
+                                </select>
+                                <div class="flex gap-2">
+                                  <.button phx-click="submit_escalation_forward" class="text-xs bg-amber-500 hover:bg-amber-400 text-zinc-950 h-7">Forward</.button>
+                                  <.button phx-click="cancel_escalation_action" variant="outline" class="text-xs border-zinc-700 text-zinc-400 h-7">Cancel</.button>
+                                </div>
+                              </div>
+                            <% "handle" -> %>
+                              <form phx-submit="submit_escalation_handle" class="space-y-2 p-2 rounded bg-zinc-800/30 border border-zinc-700/50">
+                                <div class="text-[10px] font-medium text-zinc-400">Response:</div>
+                                <textarea name="response" rows="3" placeholder="Your response..."
+                                  class="w-full px-2 py-1.5 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 resize-none"></textarea>
+                                <div class="flex gap-2">
+                                  <.button type="submit" class="text-xs bg-emerald-500 hover:bg-emerald-400 text-zinc-950 h-7">Submit</.button>
+                                  <.button type="button" phx-click="cancel_escalation_action" variant="outline" class="text-xs border-zinc-700 text-zinc-400 h-7">Cancel</.button>
+                                </div>
+                              </form>
+                            <% "reject" -> %>
+                              <form phx-submit="submit_escalation_reject" class="space-y-2 p-2 rounded bg-zinc-800/30 border border-zinc-700/50">
+                                <div class="text-[10px] font-medium text-zinc-400">Rejection reason:</div>
+                                <textarea name="reason" rows="2" placeholder="Reason for rejection..."
+                                  class="w-full px-2 py-1.5 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 resize-none"></textarea>
+                                <div class="flex gap-2">
+                                  <.button type="submit" class="text-xs bg-red-500 hover:bg-red-400 text-white h-7">Reject</.button>
+                                  <.button type="button" phx-click="cancel_escalation_action" variant="outline" class="text-xs border-zinc-700 text-zinc-400 h-7">Cancel</.button>
+                                </div>
+                              </form>
+                            <% _ -> %>
+                          <% end %>
+                        <% else %>
+                          <div class="flex gap-2">
+                            <button phx-click="escalation_action" phx-value-action="forward" phx-value-id={esc.id}
+                              class="text-[10px] px-2.5 py-1 rounded bg-blue-500/15 text-blue-400 hover:bg-blue-500/25">
+                              ↗ Forward
+                            </button>
+                            <button phx-click="escalation_action" phx-value-action="handle" phx-value-id={esc.id}
+                              class="text-[10px] px-2.5 py-1 rounded bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25">
+                              ✓ Handle
+                            </button>
+                            <button phx-click="escalation_action" phx-value-action="reject" phx-value-id={esc.id}
+                              class="text-[10px] px-2.5 py-1 rounded bg-red-500/15 text-red-400 hover:bg-red-500/25">
+                              ✕ Reject
+                            </button>
+                          </div>
+
+                          <%!-- Status history --%>
+                          <%= if esc.status != "pending" do %>
+                            <div class="mt-2 text-[10px] text-zinc-500">
+                              Status: <span class={"font-medium " <>
+                                case esc.status do
+                                  "forwarded" -> "text-blue-400"
+                                  "handled" -> "text-emerald-400"
+                                  "rejected" -> "text-red-400"
+                                  _ -> "text-zinc-400"
+                                end}><%= esc.status %></span>
+                              <%= if esc.forwarded_to do %>
+                                → <span class="text-zinc-400"><%= esc.forwarded_to %></span>
+                              <% end %>
+                            </div>
+                          <% end %>
+                        <% end %>
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
+              </div>
+            </div>
+
+          <% "announcements" -> %>
+            <%!-- Announcements tab --%>
+            <div class="h-full overflow-y-auto p-4">
+              <div class="max-w-3xl mx-auto">
+                <%!-- New announcement form (tier 0-1 only — dashboard user is effectively tier 0) --%>
+                <div class="mb-4 p-4 rounded-lg bg-zinc-900 border border-zinc-800">
+                  <div class="text-xs font-semibold text-zinc-400 mb-3">📢 New Announcement</div>
+                  <form phx-submit="send_announcement" class="space-y-2">
+                    <div class="flex gap-2">
+                      <select name="scope" class="h-8 px-2 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200">
+                        <option value="fleet">Fleet-wide</option>
+                        <option value="squad">Squad</option>
+                      </select>
+                      <select name="priority" class="h-8 px-2 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200">
+                        <option value="normal">Normal</option>
+                        <option value="high">High</option>
+                        <option value="urgent">Urgent</option>
+                      </select>
+                    </div>
+                    <textarea name="body" rows="3" placeholder="Announcement body..."
+                      class="w-full px-2 py-1.5 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 resize-none"></textarea>
+                    <.button type="submit" class="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs h-8">
+                      <Icons.radio class="w-3.5 h-3.5 mr-1" /> Broadcast
+                    </.button>
+                  </form>
+                </div>
+
+                <%!-- Announcement history --%>
+                <div class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">Recent Announcements</div>
+                <%= if @announcements == [] do %>
+                  <div class="flex flex-col items-center justify-center py-12">
+                    <Icons.radio class="w-8 h-8 text-zinc-600 mb-3" />
+                    <p class="text-sm text-zinc-500">No announcements yet</p>
+                  </div>
+                <% else %>
+                  <div class="space-y-2">
+                    <%= for ann <- @announcements do %>
+                      <div class="p-3 rounded-lg bg-zinc-900 border border-zinc-800">
+                        <div class="flex items-center justify-between mb-1">
+                          <div class="flex items-center gap-2">
+                            <span class="text-xs font-medium text-zinc-300"><%= ann["from"] %></span>
+                            <span class={"text-[9px] px-1.5 py-0.5 rounded " <>
+                              case ann["scope"] do
+                                "fleet" -> "bg-amber-500/15 text-amber-400"
+                                s when is_binary(s) -> "bg-green-500/15 text-green-400"
+                                _ -> "bg-zinc-700 text-zinc-400"
+                              end}><%= ann["scope"] %></span>
+                            <%= if ann["priority"] != "normal" do %>
+                              <span class={"text-[9px] px-1.5 py-0.5 rounded font-bold " <>
+                                case ann["priority"] do
+                                  "urgent" -> "bg-red-500/15 text-red-400"
+                                  "high" -> "bg-orange-500/15 text-orange-400"
+                                  _ -> "bg-zinc-700 text-zinc-400"
+                                end}><%= ann["priority"] %></span>
+                            <% end %>
+                          </div>
+                          <span class="text-[10px] text-zinc-600"><%= ann["timestamp"] %></span>
+                        </div>
+                        <div class="text-xs text-zinc-400"><%= ann["body"] %></div>
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
+              </div>
+            </div>
+
+          <% _ -> %>
+            <div class="p-4 text-zinc-500">Unknown tab</div>
         <% end %>
       </div>
     </div>
@@ -4347,10 +5321,52 @@ defmodule Hub.Live.DashboardLive do
     ) |> Hub.Repo.all()
   end
 
+  defp load_registered_agents_detail(fleet_id) do
+    import Ecto.Query
+    from(a in Hub.Auth.Agent,
+      where: a.fleet_id == ^fleet_id,
+      order_by: [desc: a.inserted_at],
+      preload: [:role_template, :squad]
+    ) |> Hub.Repo.all()
+  end
+
+  defp load_agent_kanban_tasks(agent_id, fleet_id) do
+    case Hub.Kanban.agent_queue(agent_id, fleet_id) do
+      tasks when is_list(tasks) -> Enum.take(tasks, 5)
+      _ -> []
+    end
+  rescue
+    _ -> []
+  end
+
+  defp tier_for_agent(agent) do
+    Hub.Messaging.AccessControl.agent_tier(agent)
+  rescue
+    _ -> 4
+  end
+
+  defp tier_badge_class(tier) do
+    case tier do
+      0 -> "bg-purple-500/15 text-purple-400 border-purple-500/20"
+      1 -> "bg-emerald-500/15 text-emerald-400 border-emerald-500/20"
+      2 -> "bg-yellow-500/15 text-yellow-400 border-yellow-500/20"
+      3 -> "bg-orange-500/15 text-orange-400 border-orange-500/20"
+      _ -> "bg-red-500/15 text-red-400 border-red-500/20"
+    end
+  end
+
   defp load_conversation(fleet_id, agent_id) do
     case Hub.DirectMessage.history(fleet_id, "dashboard", agent_id, limit: 50) do
       {:ok, msgs} -> msgs
       {:error, _} -> []
+    end
+  end
+
+  defp maybe_reload_kanban(socket) do
+    if socket.assigns.current_view == "kanban" do
+      load_kanban_board(socket)
+    else
+      socket
     end
   end
 
