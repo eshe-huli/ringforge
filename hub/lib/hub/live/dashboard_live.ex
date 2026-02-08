@@ -105,7 +105,28 @@ defmodule Hub.Live.DashboardLive do
           },
           kanban_squads: [],
           kanban_edit_mode: false,
-          kanban_progress_pct: 0
+          kanban_progress_pct: 0,
+          # Roles management
+          roles: [],
+          selected_role: nil,
+          role_detail_open: false,
+          role_form_open: false,
+          role_form: %{
+            name: "",
+            slug: "",
+            system_prompt: "",
+            capabilities: [],
+            constraints: [],
+            tools_allowed: [],
+            escalation_rules: "",
+            context_injection_tier: "auto",
+            new_capability: "",
+            new_constraint: "",
+            new_tool: ""
+          },
+          role_form_mode: :create,
+          role_form_id: nil,
+          role_assign_agent_id: nil
         )
 
         if connected?(socket) do
@@ -222,6 +243,13 @@ defmodule Hub.Live.DashboardLive do
 
     socket = if view == "kanban" do
       load_kanban_board(socket)
+    else
+      socket
+    end
+
+    socket = if view == "roles" do
+      roles = Hub.Roles.list_roles(socket.assigns.tenant_id)
+      assign(socket, roles: roles, selected_role: nil, role_detail_open: false, role_form_open: false)
     else
       socket
     end
@@ -1036,6 +1064,248 @@ defmodule Hub.Live.DashboardLive do
     )}
   end
 
+  # ── Role Management Events ─────────────────────────────────
+
+  def handle_event("select_role", %{"id" => id}, socket) do
+    case Hub.Roles.get_role(id) do
+      {:ok, role} ->
+        {:noreply, assign(socket, selected_role: role, role_detail_open: true)}
+      {:error, _} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Role not found"})}
+    end
+  end
+
+  def handle_event("close_role_detail", _, socket) do
+    {:noreply, assign(socket, role_detail_open: false, selected_role: nil)}
+  end
+
+  def handle_event("open_role_form", %{"mode" => "create"}, socket) do
+    {:noreply, assign(socket,
+      role_form_open: true,
+      role_form_mode: :create,
+      role_form_id: nil,
+      role_form: %{
+        name: "", slug: "", system_prompt: "",
+        capabilities: [], constraints: [], tools_allowed: [],
+        escalation_rules: "", context_injection_tier: "auto",
+        new_capability: "", new_constraint: "", new_tool: ""
+      }
+    )}
+  end
+
+  def handle_event("open_role_form", %{"mode" => "edit", "role-id" => role_id}, socket) do
+    case Hub.Roles.get_role(role_id) do
+      {:ok, role} ->
+        {:noreply, assign(socket,
+          role_form_open: true,
+          role_form_mode: :edit,
+          role_form_id: role_id,
+          role_form: %{
+            name: role.name || "",
+            slug: role.slug || "",
+            system_prompt: role.system_prompt || "",
+            capabilities: role.capabilities || [],
+            constraints: role.constraints || [],
+            tools_allowed: role.tools_allowed || [],
+            escalation_rules: role.escalation_rules || "",
+            context_injection_tier: role.context_injection_tier || "auto",
+            new_capability: "", new_constraint: "", new_tool: ""
+          }
+        )}
+      {:error, _} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Role not found"})}
+    end
+  end
+
+  def handle_event("close_role_form", _, socket) do
+    {:noreply, assign(socket, role_form_open: false)}
+  end
+
+  def handle_event("role_form_field", %{"field" => field, "value" => value}, socket) do
+    form = socket.assigns.role_form
+    form = case field do
+      "name" ->
+        slug = if socket.assigns.role_form_mode == :create do
+          value |> String.downcase() |> String.replace(~r/[^a-z0-9]+/, "-") |> String.trim("-")
+        else
+          form.slug
+        end
+        %{form | name: value, slug: slug}
+      "slug" -> %{form | slug: value}
+      "system_prompt" -> %{form | system_prompt: value}
+      "escalation_rules" -> %{form | escalation_rules: value}
+      "context_injection_tier" -> %{form | context_injection_tier: value}
+      "new_capability" -> %{form | new_capability: value}
+      "new_constraint" -> %{form | new_constraint: value}
+      "new_tool" -> %{form | new_tool: value}
+      _ -> form
+    end
+    {:noreply, assign(socket, role_form: form)}
+  end
+
+  # Handle select change for context_injection_tier (sent as %{"context_injection_tier" => val})
+  def handle_event("role_form_field", %{"context_injection_tier" => value}, socket) do
+    form = %{socket.assigns.role_form | context_injection_tier: value}
+    {:noreply, assign(socket, role_form: form)}
+  end
+
+  # Handle select change for role_assign_agent (sent as %{"agent_id" => val})
+  def handle_event("role_assign_agent_select", %{"agent_id" => agent_id}, socket) do
+    {:noreply, assign(socket, role_assign_agent_id: agent_id)}
+  end
+
+  def handle_event("role_add_capability", _, socket) do
+    form = socket.assigns.role_form
+    cap = String.trim(form.new_capability)
+    if cap != "" and cap not in form.capabilities do
+      {:noreply, assign(socket, role_form: %{form | capabilities: form.capabilities ++ [cap], new_capability: ""})}
+    else
+      {:noreply, assign(socket, role_form: %{form | new_capability: ""})}
+    end
+  end
+
+  def handle_event("role_remove_capability", %{"value" => cap}, socket) do
+    form = socket.assigns.role_form
+    {:noreply, assign(socket, role_form: %{form | capabilities: List.delete(form.capabilities, cap)})}
+  end
+
+  def handle_event("role_add_constraint", _, socket) do
+    form = socket.assigns.role_form
+    c = String.trim(form.new_constraint)
+    if c != "" and c not in form.constraints do
+      {:noreply, assign(socket, role_form: %{form | constraints: form.constraints ++ [c], new_constraint: ""})}
+    else
+      {:noreply, assign(socket, role_form: %{form | new_constraint: ""})}
+    end
+  end
+
+  def handle_event("role_remove_constraint", %{"value" => c}, socket) do
+    form = socket.assigns.role_form
+    {:noreply, assign(socket, role_form: %{form | constraints: List.delete(form.constraints, c)})}
+  end
+
+  def handle_event("role_add_tool", _, socket) do
+    form = socket.assigns.role_form
+    t = String.trim(form.new_tool)
+    if t != "" and t not in form.tools_allowed do
+      {:noreply, assign(socket, role_form: %{form | tools_allowed: form.tools_allowed ++ [t], new_tool: ""})}
+    else
+      {:noreply, assign(socket, role_form: %{form | new_tool: ""})}
+    end
+  end
+
+  def handle_event("role_remove_tool", %{"value" => t}, socket) do
+    form = socket.assigns.role_form
+    {:noreply, assign(socket, role_form: %{form | tools_allowed: List.delete(form.tools_allowed, t)})}
+  end
+
+  def handle_event("save_role", _, socket) do
+    form = socket.assigns.role_form
+    attrs = %{
+      name: String.trim(form.name),
+      slug: String.trim(form.slug),
+      system_prompt: String.trim(form.system_prompt),
+      capabilities: form.capabilities,
+      constraints: form.constraints,
+      tools_allowed: form.tools_allowed,
+      escalation_rules: String.trim(form.escalation_rules),
+      context_injection_tier: form.context_injection_tier
+    }
+
+    result = case socket.assigns.role_form_mode do
+      :create -> Hub.Roles.create_role(socket.assigns.tenant_id, attrs)
+      :edit -> Hub.Roles.update_role(socket.assigns.role_form_id, attrs)
+    end
+
+    case result do
+      {:ok, _role} ->
+        roles = Hub.Roles.list_roles(socket.assigns.tenant_id)
+        action = if socket.assigns.role_form_mode == :create, do: "created", else: "updated"
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket,
+          roles: roles,
+          role_form_open: false,
+          toast: {:success, "Role \"#{attrs.name}\" #{action}"}
+        )}
+
+      {:error, changeset} when is_struct(changeset) ->
+        error = Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
+                |> Enum.map_join(". ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, error})}
+
+      {:error, reason} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Failed: #{reason}"})}
+    end
+  end
+
+  def handle_event("delete_role", %{"id" => id}, socket) do
+    case Hub.Roles.delete_role(id) do
+      {:ok, _} ->
+        roles = Hub.Roles.list_roles(socket.assigns.tenant_id)
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket,
+          roles: roles,
+          selected_role: nil,
+          role_detail_open: false,
+          toast: {:success, "Role deleted"}
+        )}
+
+      {:error, :predefined_immutable} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Cannot delete predefined roles"})}
+
+      {:error, _reason} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Failed to delete role"})}
+    end
+  end
+
+  def handle_event("assign_role", %{"agent-id" => agent_id, "role-id" => role_id}, socket) do
+    case Hub.Roles.assign_role(agent_id, role_id) do
+      {:ok, _} ->
+        roles = Hub.Roles.list_roles(socket.assigns.tenant_id)
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, roles: roles, toast: {:success, "Role assigned to agent"})}
+
+      {:error, reason} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Failed to assign role: #{reason}"})}
+    end
+  end
+
+  def handle_event("unassign_role", %{"agent-id" => agent_id}, socket) do
+    case Hub.Roles.unassign_role(agent_id) do
+      {:ok, _} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:success, "Role unassigned"})}
+
+      {:error, reason} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Failed: #{reason}"})}
+    end
+  end
+
+  def handle_event("role_assign_to_agent", _, socket) do
+    agent_id = socket.assigns.role_assign_agent_id
+    role = socket.assigns.selected_role
+    if agent_id && agent_id != "" && role do
+      case Hub.Roles.assign_role(agent_id, role.id) do
+        {:ok, _} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, role_assign_agent_id: nil, toast: {:success, "Role \"#{role.name}\" assigned to #{agent_id}"})}
+        {:error, reason} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, "Failed: #{reason}"})}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
   # ══════════════════════════════════════════════════════════
   # PubSub Handlers
   # ══════════════════════════════════════════════════════════
@@ -1531,20 +1801,31 @@ defmodule Hub.Live.DashboardLive do
         <%!-- Sidebar --%>
         <aside class={"border-r border-zinc-800 shrink-0 overflow-y-auto transition-all duration-200 bg-zinc-900 " <> if(@sidebar_collapsed, do: "w-0 overflow-hidden border-r-0", else: "w-56")}>
           <nav class="p-3 space-y-0.5">
-            <div class="px-3 py-2 mb-1">
-              <span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Menu</span>
-            </div>
+            <%!-- OPERATIONS --%>
+            <div class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-3 py-2">Operations</div>
             <Components.nav_item view="dashboard" icon={:layout_dashboard} label="Dashboard" active={@current_view == "dashboard"} />
-            <Components.nav_item view="fleets" icon={:layers} label="Fleets" active={@current_view == "fleets"} badge={to_string(length(@tenant_fleets))} />
             <Components.nav_item view="agents" icon={:bot} label="Agents" active={@current_view == "agents"} badge={to_string(map_size(@agents))} />
-            <Components.nav_item view="activity" icon={:activity} label="Activity" active={@current_view == "activity"} />
             <Components.nav_item view="kanban" icon={:kanban} label="Kanban" active={@current_view == "kanban"} />
             <Components.nav_item view="messaging" icon={:message_square} label="Messaging" active={@current_view == "messaging"} />
+
+            <%!-- ORGANIZATION --%>
+            <div class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-3 py-2 mt-4">Organization</div>
+            <Components.nav_item view="fleets" icon={:layers} label="Fleets" active={@current_view == "fleets"} badge={to_string(length(@tenant_fleets))} />
+            <Components.nav_item view="roles" icon={:shield} label="Roles" active={@current_view == "roles"} />
+            <Components.nav_item view="activity" icon={:activity} label="Activity" active={@current_view == "activity"} />
+
+            <%!-- INFRASTRUCTURE --%>
+            <div class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-3 py-2 mt-4">Infrastructure</div>
+            <Components.nav_link href="/webhooks" icon={:webhook} label="Webhooks" />
+            <Components.nav_link href="/devices" icon={:smartphone} label="Devices" />
+            <Components.nav_link href="/dashboard/metrics" icon={:bar_chart} label="Metrics" />
+
+            <%!-- ADMIN --%>
+            <div class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-3 py-2 mt-4">Admin</div>
             <Components.nav_item view="quotas" icon={:gauge} label="Quotas" active={@current_view == "quotas"} />
-            <Components.nav_item view="metrics" icon={:activity} label="Metrics" active={false} />
-            <Components.nav_item view="provisioning" icon={:cloud} label="Provisioning" active={false} />
-            <Components.nav_item view="webhooks" icon={:webhook} label="Webhooks" active={false} />
-            <Components.nav_item view="billing" icon={:credit_card} label="Billing" active={false} />
+            <Components.nav_link href="/billing" icon={:credit_card} label="Billing" />
+            <Components.nav_link href="/invites" icon={:user_plus} label="Invites" />
+            <Components.nav_link href="/audit" icon={:file_search} label="Audit" />
             <Components.nav_item view="settings" icon={:settings} label="Settings" active={@current_view == "settings"} />
 
             <.separator class="my-4" />
@@ -1565,6 +1846,7 @@ defmodule Hub.Live.DashboardLive do
             <% "dashboard" -> %> <%= render_overview(assigns) %>
             <% "fleets" -> %> <%= render_fleets(assigns) %>
             <% "agents" -> %> <%= render_agents(assigns) %>
+            <% "roles" -> %> <%= render_roles(assigns) %>
             <% "activity" -> %> <%= render_activity(assigns) %>
             <% "kanban" -> %> <%= render_kanban(assigns) %>
             <% "messaging" -> %> <%= render_messaging(assigns) %>
@@ -2070,6 +2352,362 @@ defmodule Hub.Live.DashboardLive do
     </div>
     """
   end
+
+  # ══════════════════════════════════════════════════════════
+  # Page: Roles
+  # ══════════════════════════════════════════════════════════
+
+  defp render_roles(assigns) do
+    ~H"""
+    <div class="h-full flex flex-col animate-fade-in">
+      <%!-- Header --%>
+      <div class="px-6 py-4 border-b border-zinc-800 shrink-0">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="text-lg font-semibold text-zinc-100">Roles</h2>
+            <p class="text-sm text-zinc-500"><%= length(@roles) %> role templates</p>
+          </div>
+          <.button variant="outline" size="sm" phx-click="open_role_form" phx-value-mode="create" class="h-8 px-3 border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300">
+            <Icons.plus class="w-3.5 h-3.5 mr-1.5" /> Create Custom Role
+          </.button>
+        </div>
+      </div>
+
+      <%!-- Roles Grid --%>
+      <div class="flex-1 overflow-auto p-6">
+        <%= if @roles == [] do %>
+          <Components.empty_state message="No roles defined" subtitle="Create a custom role or seed predefined roles" icon={:shield} />
+        <% else %>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <%= for role <- @roles do %>
+              <.card
+                phx-click="select_role"
+                phx-value-id={role.id}
+                class={"bg-zinc-900 border-zinc-800 hover:border-zinc-700 cursor-pointer transition-all duration-200 " <> if(@selected_role && @selected_role.id == role.id, do: "border-amber-500/40", else: "")}
+              >
+                <.card_content class="p-4">
+                  <div class="flex items-start justify-between mb-3">
+                    <div class="flex items-center gap-2.5">
+                      <div class={"p-2 rounded-lg " <> if(role.is_predefined, do: "bg-blue-500/15 text-blue-400", else: "bg-amber-500/15 text-amber-400")}>
+                        <Icons.shield class="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div class="text-sm font-medium text-zinc-200 flex items-center gap-1.5">
+                          <%= role.name %>
+                          <%= if role.is_predefined do %>
+                            <span title="Predefined (read-only)" class="text-xs">🔒</span>
+                          <% end %>
+                        </div>
+                        <div class="text-[11px] text-zinc-500 font-mono"><%= role.slug %></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <%!-- Tier badge --%>
+                  <div class="flex items-center gap-2 mb-3">
+                    <.badge variant="outline" class={"text-[10px] px-1.5 py-0.5 " <> role_tier_style(role.context_injection_tier)}>
+                      <%= role.context_injection_tier || "auto" %>
+                    </.badge>
+                    <%= if role.capabilities && length(role.capabilities) > 0 do %>
+                      <.badge variant="secondary" class="text-[10px] px-1.5 py-0.5 bg-zinc-800 text-zinc-400">
+                        <%= length(role.capabilities) %> capabilities
+                      </.badge>
+                    <% end %>
+                    <%= if role.constraints && length(role.constraints) > 0 do %>
+                      <.badge variant="secondary" class="text-[10px] px-1.5 py-0.5 bg-zinc-800 text-zinc-400">
+                        <%= length(role.constraints) %> constraints
+                      </.badge>
+                    <% end %>
+                  </div>
+
+                  <%!-- System prompt preview --%>
+                  <p class="text-xs text-zinc-500 line-clamp-2 mb-3"><%= String.slice(role.system_prompt || "", 0..120) %><%= if String.length(role.system_prompt || "") > 120, do: "…" %></p>
+
+                  <%!-- Action buttons for custom roles --%>
+                  <%= unless role.is_predefined do %>
+                    <div class="flex gap-2 pt-2 border-t border-zinc-800">
+                      <.button variant="ghost" size="sm" phx-click="open_role_form" phx-value-mode="edit" phx-value-role-id={role.id} class="h-7 text-xs text-zinc-400 hover:text-zinc-200">
+                        <Icons.pencil class="w-3 h-3 mr-1" /> Edit
+                      </.button>
+                      <.button variant="ghost" size="sm" phx-click="delete_role" phx-value-id={role.id} class="h-7 text-xs text-red-400/70 hover:text-red-400" data-confirm="Delete this role? Agents using it will be unassigned.">
+                        <Icons.trash class="w-3 h-3 mr-1" /> Delete
+                      </.button>
+                    </div>
+                  <% end %>
+                </.card_content>
+              </.card>
+            <% end %>
+          </div>
+        <% end %>
+      </div>
+
+      <%!-- Role Detail Slide-out --%>
+      <%= if @role_detail_open && @selected_role do %>
+        <div class="fixed inset-0 z-50 flex justify-end">
+          <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" phx-click="close_role_detail"></div>
+          <div class="relative w-full max-w-lg bg-zinc-900 border-l border-zinc-800 overflow-y-auto animate-slide-in-right">
+            <div class="p-6">
+              <%!-- Header --%>
+              <div class="flex items-start justify-between mb-6">
+                <div>
+                  <div class="flex items-center gap-2">
+                    <h3 class="text-lg font-semibold text-zinc-100"><%= @selected_role.name %></h3>
+                    <%= if @selected_role.is_predefined do %>
+                      <.badge variant="outline" class="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20">Predefined 🔒</.badge>
+                    <% else %>
+                      <.badge variant="outline" class="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/20">Custom</.badge>
+                    <% end %>
+                  </div>
+                  <p class="text-sm text-zinc-500 font-mono mt-1"><%= @selected_role.slug %></p>
+                </div>
+                <.button variant="ghost" size="icon" phx-click="close_role_detail" class="h-8 w-8 text-zinc-400 hover:text-zinc-200">
+                  <Icons.x class="w-4 h-4" />
+                </.button>
+              </div>
+
+              <%!-- Tier --%>
+              <div class="mb-5">
+                <div class="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Context Injection Tier</div>
+                <.badge variant="outline" class={"text-xs px-2 py-1 " <> role_tier_style(@selected_role.context_injection_tier)}>
+                  <%= @selected_role.context_injection_tier || "auto" %>
+                </.badge>
+              </div>
+
+              <%!-- System Prompt --%>
+              <div class="mb-5">
+                <div class="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">System Prompt</div>
+                <div class="bg-zinc-950 border border-zinc-800 rounded-lg p-3 max-h-48 overflow-y-auto">
+                  <pre class="text-xs text-zinc-300 whitespace-pre-wrap font-mono"><%= @selected_role.system_prompt %></pre>
+                </div>
+              </div>
+
+              <%!-- Capabilities --%>
+              <%= if @selected_role.capabilities && @selected_role.capabilities != [] do %>
+                <div class="mb-5">
+                  <div class="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Capabilities</div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <%= for cap <- @selected_role.capabilities do %>
+                      <.badge variant="outline" class="text-[11px] px-2 py-0.5 bg-green-500/10 text-green-400 border-green-500/20"><%= cap %></.badge>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Constraints --%>
+              <%= if @selected_role.constraints && @selected_role.constraints != [] do %>
+                <div class="mb-5">
+                  <div class="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Constraints</div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <%= for c <- @selected_role.constraints do %>
+                      <.badge variant="outline" class="text-[11px] px-2 py-0.5 bg-red-500/10 text-red-400 border-red-500/20"><%= c %></.badge>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Tools Allowed --%>
+              <%= if @selected_role.tools_allowed && @selected_role.tools_allowed != [] do %>
+                <div class="mb-5">
+                  <div class="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Tools Allowed</div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <%= for t <- @selected_role.tools_allowed do %>
+                      <.badge variant="outline" class="text-[11px] px-2 py-0.5 bg-purple-500/10 text-purple-400 border-purple-500/20"><%= t %></.badge>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Escalation Rules --%>
+              <%= if @selected_role.escalation_rules && @selected_role.escalation_rules != "" do %>
+                <div class="mb-5">
+                  <div class="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Escalation Rules</div>
+                  <div class="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
+                    <pre class="text-xs text-zinc-300 whitespace-pre-wrap font-mono"><%= @selected_role.escalation_rules %></pre>
+                  </div>
+                </div>
+              <% end %>
+
+              <.separator class="my-5" />
+
+              <%!-- Assign to Agent --%>
+              <div class="mb-4">
+                <div class="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Assign to Agent</div>
+                <div class="flex gap-2">
+                  <select
+                    phx-change="role_assign_agent_select"
+                    name="agent_id"
+                    class="flex-1 h-9 text-sm bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200 px-3 focus:border-zinc-600 focus:outline-none"
+                  >
+                    <option value="">Select agent…</option>
+                    <%= for {agent_id, meta} <- @agents do %>
+                      <option value={agent_id} selected={@role_assign_agent_id == agent_id}>
+                        <%= meta[:name] || agent_id %>
+                      </option>
+                    <% end %>
+                  </select>
+                  <.button variant="outline" size="sm" phx-click="role_assign_to_agent" class="h-9 px-3 border-amber-500/30 text-amber-400 hover:bg-amber-500/10">
+                    Assign
+                  </.button>
+                </div>
+              </div>
+
+              <%!-- Edit/Delete for custom --%>
+              <%= unless @selected_role.is_predefined do %>
+                <div class="flex gap-2 pt-4 border-t border-zinc-800">
+                  <.button variant="outline" size="sm" phx-click="open_role_form" phx-value-mode="edit" phx-value-role-id={@selected_role.id} class="flex-1 h-9 border-zinc-700 text-zinc-300 hover:bg-zinc-800">
+                    <Icons.pencil class="w-3.5 h-3.5 mr-1.5" /> Edit Role
+                  </.button>
+                  <.button variant="outline" size="sm" phx-click="delete_role" phx-value-id={@selected_role.id} class="h-9 px-3 border-red-500/30 text-red-400 hover:bg-red-500/10" data-confirm="Delete this role?">
+                    <Icons.trash class="w-3.5 h-3.5" />
+                  </.button>
+                </div>
+              <% end %>
+            </div>
+          </div>
+        </div>
+      <% end %>
+
+      <%!-- Create/Edit Role Modal --%>
+      <%= if @role_form_open do %>
+        <div class="fixed inset-0 z-50 flex items-center justify-center">
+          <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" phx-click="close_role_form"></div>
+          <div class="relative w-full max-w-2xl max-h-[85vh] bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl overflow-y-auto animate-fade-in">
+            <div class="p-6">
+              <div class="flex items-center justify-between mb-6">
+                <h3 class="text-lg font-semibold text-zinc-100">
+                  <%= if @role_form_mode == :create, do: "Create Custom Role", else: "Edit Role" %>
+                </h3>
+                <.button variant="ghost" size="icon" phx-click="close_role_form" class="h-8 w-8 text-zinc-400 hover:text-zinc-200">
+                  <Icons.x class="w-4 h-4" />
+                </.button>
+              </div>
+
+              <div class="space-y-5">
+                <%!-- Name --%>
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Name</label>
+                  <.input type="text" value={@role_form.name} phx-keyup="role_form_field" phx-value-field="name" placeholder="e.g. Code Reviewer" class="w-full bg-zinc-950 border-zinc-800 text-zinc-100" />
+                </div>
+
+                <%!-- Slug --%>
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Slug</label>
+                  <.input type="text" value={@role_form.slug} phx-keyup="role_form_field" phx-value-field="slug" placeholder="code-reviewer" class="w-full bg-zinc-950 border-zinc-800 text-zinc-100 font-mono" />
+                  <p class="text-[10px] text-zinc-600 mt-1">Lowercase alphanumeric with hyphens. Auto-generated from name.</p>
+                </div>
+
+                <%!-- System Prompt --%>
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">System Prompt</label>
+                  <textarea
+                    phx-keyup="role_form_field"
+                    phx-value-field="system_prompt"
+                    rows="6"
+                    placeholder="You are a..."
+                    class="w-full bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 text-sm p-3 font-mono resize-y focus:border-zinc-600 focus:outline-none"
+                  ><%= @role_form.system_prompt %></textarea>
+                </div>
+
+                <%!-- Capabilities (tag input) --%>
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Capabilities</label>
+                  <div class="flex flex-wrap gap-1.5 mb-2">
+                    <%= for cap <- @role_form.capabilities do %>
+                      <.badge variant="outline" class="text-[11px] px-2 py-0.5 bg-green-500/10 text-green-400 border-green-500/20 flex items-center gap-1">
+                        <%= cap %>
+                        <button type="button" phx-click="role_remove_capability" phx-value-value={cap} class="hover:text-green-200">×</button>
+                      </.badge>
+                    <% end %>
+                  </div>
+                  <div class="flex gap-2">
+                    <.input type="text" value={@role_form.new_capability} phx-keyup="role_form_field" phx-value-field="new_capability" placeholder="Add capability…" class="flex-1 bg-zinc-950 border-zinc-800 text-zinc-100" />
+                    <.button variant="outline" size="sm" phx-click="role_add_capability" class="h-9 px-3 border-zinc-700 text-zinc-400 hover:text-zinc-200">Add</.button>
+                  </div>
+                </div>
+
+                <%!-- Constraints (tag input) --%>
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Constraints</label>
+                  <div class="flex flex-wrap gap-1.5 mb-2">
+                    <%= for c <- @role_form.constraints do %>
+                      <.badge variant="outline" class="text-[11px] px-2 py-0.5 bg-red-500/10 text-red-400 border-red-500/20 flex items-center gap-1">
+                        <%= c %>
+                        <button type="button" phx-click="role_remove_constraint" phx-value-value={c} class="hover:text-red-200">×</button>
+                      </.badge>
+                    <% end %>
+                  </div>
+                  <div class="flex gap-2">
+                    <.input type="text" value={@role_form.new_constraint} phx-keyup="role_form_field" phx-value-field="new_constraint" placeholder="Add constraint…" class="flex-1 bg-zinc-950 border-zinc-800 text-zinc-100" />
+                    <.button variant="outline" size="sm" phx-click="role_add_constraint" class="h-9 px-3 border-zinc-700 text-zinc-400 hover:text-zinc-200">Add</.button>
+                  </div>
+                </div>
+
+                <%!-- Tools Allowed (tag input) --%>
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Tools Allowed</label>
+                  <div class="flex flex-wrap gap-1.5 mb-2">
+                    <%= for t <- @role_form.tools_allowed do %>
+                      <.badge variant="outline" class="text-[11px] px-2 py-0.5 bg-purple-500/10 text-purple-400 border-purple-500/20 flex items-center gap-1">
+                        <%= t %>
+                        <button type="button" phx-click="role_remove_tool" phx-value-value={t} class="hover:text-purple-200">×</button>
+                      </.badge>
+                    <% end %>
+                  </div>
+                  <div class="flex gap-2">
+                    <.input type="text" value={@role_form.new_tool} phx-keyup="role_form_field" phx-value-field="new_tool" placeholder="Add tool…" class="flex-1 bg-zinc-950 border-zinc-800 text-zinc-100" />
+                    <.button variant="outline" size="sm" phx-click="role_add_tool" class="h-9 px-3 border-zinc-700 text-zinc-400 hover:text-zinc-200">Add</.button>
+                  </div>
+                </div>
+
+                <%!-- Escalation Rules --%>
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Escalation Rules</label>
+                  <textarea
+                    phx-keyup="role_form_field"
+                    phx-value-field="escalation_rules"
+                    rows="3"
+                    placeholder="Optional escalation rules…"
+                    class="w-full bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 text-sm p-3 font-mono resize-y focus:border-zinc-600 focus:outline-none"
+                  ><%= @role_form.escalation_rules %></textarea>
+                </div>
+
+                <%!-- Context Injection Tier --%>
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Context Injection Tier</label>
+                  <select
+                    phx-change="role_form_field"
+                    phx-value-field="context_injection_tier"
+                    name="context_injection_tier"
+                    class="w-full h-9 text-sm bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200 px-3 focus:border-zinc-600 focus:outline-none"
+                  >
+                    <%= for tier <- ["auto", "tier1", "tier2", "tier3"] do %>
+                      <option value={tier} selected={@role_form.context_injection_tier == tier}><%= tier %></option>
+                    <% end %>
+                  </select>
+                </div>
+
+                <%!-- Save --%>
+                <div class="flex gap-3 pt-4 border-t border-zinc-800">
+                  <.button phx-click="save_role" class="flex-1 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold h-10">
+                    <%= if @role_form_mode == :create, do: "Create Role", else: "Save Changes" %>
+                  </.button>
+                  <.button variant="outline" phx-click="close_role_form" class="h-10 px-4 border-zinc-700 text-zinc-400 hover:text-zinc-200">
+                    Cancel
+                  </.button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      <% end %>
+    </div>
+    """
+  end
+
+  defp role_tier_style("tier1"), do: "bg-green-500/10 text-green-400 border-green-500/20"
+  defp role_tier_style("tier2"), do: "bg-blue-500/10 text-blue-400 border-blue-500/20"
+  defp role_tier_style("tier3"), do: "bg-purple-500/10 text-purple-400 border-purple-500/20"
+  defp role_tier_style(_), do: "bg-zinc-700 text-zinc-400 border-zinc-600"
 
   # ══════════════════════════════════════════════════════════
   # Page: Agents

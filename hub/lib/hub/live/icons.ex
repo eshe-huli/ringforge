@@ -745,4 +745,28 @@ defmodule Hub.Live.Icons do
     </svg>
     """
   end
+
+  attr :class, :string, default: "w-4 h-4"
+
+  def file_search(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 2v4a2 2 0 0 0 2 2h4"></path>
+      <path d="M4.268 21a2 2 0 0 0 1.727 1H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v3"></path>
+      <path d="m9 18-1.5-1.5"></path>
+      <circle cx="5" cy="14" r="3"></circle>
+    </svg>
+    """
+  end
+
+  attr :class, :string, default: "w-4 h-4"
+
+  def smartphone(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect width="14" height="20" x="5" y="2" rx="2" ry="2"></rect>
+      <path d="M12 18h.01"></path>
+    </svg>
+    """
+  end
 end

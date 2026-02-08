@@ -2582,6 +2582,223 @@ defmodule Hub.FleetChannel do
     {:noreply, socket}
   end
 
+  # ── Artifact Handlers ──────────────────────────────────────
+
+  def handle_in("artifact:put", %{"payload" => payload}, socket) do
+    content_b64 = Map.get(payload, "content", "")
+
+    case Base.decode64(content_b64) do
+      {:ok, content} ->
+        attrs = %{
+          "task_id" => payload["task_id"],
+          "filename" => payload["filename"],
+          "path" => payload["path"],
+          "content" => content,
+          "language" => payload["language"],
+          "description" => payload["description"],
+          "tags" => payload["tags"] || [],
+          "squad_id" => socket.assigns[:squad_id]
+        }
+
+        case Hub.Artifacts.put_artifact(
+               socket.assigns.fleet_id,
+               socket.assigns.agent_id,
+               attrs
+             ) do
+          {:ok, artifact} ->
+            wire = Hub.Artifacts.to_wire(artifact)
+            event = if artifact.version == 1, do: "artifact:created", else: "artifact:updated"
+
+            broadcast!(socket, event, %{
+              "type" => "artifact",
+              "event" => event,
+              "payload" => wire
+            })
+
+            {:reply, {:ok, %{
+              "type" => "artifact",
+              "event" => event,
+              "payload" => wire
+            }}, socket}
+
+          {:error, reason} ->
+            {:reply, {:error, %{reason: "artifact_put_failed", details: inspect(reason)}}, socket}
+        end
+
+      :error ->
+        {:reply, {:error, %{reason: "invalid_base64", message: "Content must be base64 encoded."}}, socket}
+    end
+  end
+
+  def handle_in("artifact:put", payload, socket) when is_map(payload) do
+    handle_in("artifact:put", %{"payload" => payload}, socket)
+  end
+
+  def handle_in("artifact:get", %{"payload" => %{"artifact_id" => artifact_id}}, socket) do
+    with {:ok, artifact} <- Hub.Artifacts.get_artifact(artifact_id),
+         {:ok, content} <- Hub.Artifacts.get_artifact_content(artifact_id) do
+      wire = Hub.Artifacts.to_wire(artifact)
+
+      {:reply, {:ok, %{
+        "type" => "artifact",
+        "event" => "get",
+        "payload" => Map.put(wire, "content", Base.encode64(content))
+      }}, socket}
+    else
+      {:error, :not_found} ->
+        {:reply, {:error, %{reason: "not_found", message: "Artifact not found."}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{reason: "artifact_get_failed", details: inspect(reason)}}, socket}
+    end
+  end
+
+  def handle_in("artifact:get", %{"payload" => _}, socket) do
+    {:reply, {:error, %{reason: "missing_artifact_id", message: "Provide payload.artifact_id."}}, socket}
+  end
+
+  def handle_in("artifact:list", %{"payload" => payload}, socket) do
+    opts =
+      payload
+      |> Map.take(["task_id", "status", "created_by", "language", "tags", "limit"])
+
+    artifacts = Hub.Artifacts.list_artifacts(socket.assigns.fleet_id, opts)
+
+    {:reply, {:ok, %{
+      "type" => "artifact",
+      "event" => "list",
+      "payload" => %{
+        "artifacts" => Enum.map(artifacts, &Hub.Artifacts.to_wire/1),
+        "count" => length(artifacts)
+      }
+    }}, socket}
+  end
+
+  def handle_in("artifact:list", _payload, socket) do
+    handle_in("artifact:list", %{"payload" => %{}}, socket)
+  end
+
+  def handle_in("artifact:review", %{"payload" => payload}, socket) do
+    artifact_id = payload["artifact_id"]
+    agent_id = socket.assigns.agent_id
+
+    # Check reviewer permissions: tech-lead, squad-leader, or PM roles
+    role_ctx = Hub.Roles.agent_role_context(agent_id)
+    role_slug = if role_ctx, do: role_ctx[:role_slug], else: nil
+
+    squad_leader? =
+      case socket.assigns[:squad_id] do
+        nil -> false
+        squad_id ->
+          case Hub.Repo.get(Hub.Groups.Group, squad_id) do
+            nil -> false
+            group ->
+              case Hub.Groups.member_role(group.group_id, agent_id) do
+                {:ok, role} when role in ["admin", "owner"] -> true
+                _ -> false
+              end
+          end
+      end
+
+    can_review? = squad_leader? or role_slug in ["tech-lead", "pm", "project-manager", "engineering-lead", "cto"]
+
+    if can_review? do
+      case Hub.Artifacts.review_artifact(artifact_id, agent_id, payload) do
+        {:ok, artifact} ->
+          wire = Hub.Artifacts.to_wire(artifact)
+
+          broadcast!(socket, "artifact:reviewed", %{
+            "type" => "artifact",
+            "event" => "reviewed",
+            "payload" => wire
+          })
+
+          {:reply, {:ok, %{
+            "type" => "artifact",
+            "event" => "reviewed",
+            "payload" => wire
+          }}, socket}
+
+        {:error, :not_found} ->
+          {:reply, {:error, %{reason: "not_found", message: "Artifact not found."}}, socket}
+
+        {:error, reason} ->
+          {:reply, {:error, %{reason: "review_failed", details: inspect(reason)}}, socket}
+      end
+    else
+      {:reply, {:error, %{
+        reason: "insufficient_permissions",
+        message: "Only tech-leads, squad leaders, and PMs can review artifacts."
+      }}, socket}
+    end
+  end
+
+  def handle_in("artifact:review", payload, socket) when is_map(payload) do
+    handle_in("artifact:review", %{"payload" => payload}, socket)
+  end
+
+  def handle_in("artifact:diff", %{"payload" => %{"artifact_id" => id, "v1" => v1, "v2" => v2}}, socket) do
+    case Hub.Artifacts.diff_versions(id, v1, v2) do
+      {:ok, diff} ->
+        {:reply, {:ok, %{
+          "type" => "artifact",
+          "event" => "diff",
+          "payload" => %{
+            "artifact_id" => id,
+            "v1" => v1,
+            "v2" => v2,
+            "diff" => diff
+          }
+        }}, socket}
+
+      {:error, :not_found} ->
+        {:reply, {:error, %{reason: "not_found", message: "Version not found."}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{reason: "diff_failed", details: inspect(reason)}}, socket}
+    end
+  end
+
+  def handle_in("artifact:diff", %{"payload" => _}, socket) do
+    {:reply, {:error, %{reason: "missing_params", message: "Provide artifact_id, v1, and v2."}}, socket}
+  end
+
+  def handle_in("artifact:history", %{"payload" => %{"artifact_id" => id}}, socket) do
+    versions = Hub.Artifacts.artifact_history(id)
+
+    {:reply, {:ok, %{
+      "type" => "artifact",
+      "event" => "history",
+      "payload" => %{
+        "artifact_id" => id,
+        "versions" => Enum.map(versions, &Hub.Artifacts.version_to_wire/1),
+        "count" => length(versions)
+      }
+    }}, socket}
+  end
+
+  def handle_in("artifact:history", %{"payload" => _}, socket) do
+    {:reply, {:error, %{reason: "missing_artifact_id", message: "Provide payload.artifact_id."}}, socket}
+  end
+
+  def handle_in("artifact:search", %{"payload" => %{"query" => query}}, socket) do
+    artifacts = Hub.Artifacts.search_artifacts(socket.assigns.fleet_id, query)
+
+    {:reply, {:ok, %{
+      "type" => "artifact",
+      "event" => "search",
+      "payload" => %{
+        "artifacts" => Enum.map(artifacts, &Hub.Artifacts.to_wire/1),
+        "count" => length(artifacts),
+        "query" => query
+      }
+    }}, socket}
+  end
+
+  def handle_in("artifact:search", %{"payload" => _}, socket) do
+    {:reply, {:error, %{reason: "missing_query", message: "Provide payload.query."}}, socket}
+  end
+
   # ── Device Handlers (IoT/Domotic) ────────────────────────
 
   def handle_in("device:register", %{"payload" => payload}, socket) do

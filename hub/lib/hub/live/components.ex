@@ -287,6 +287,29 @@ defmodule Hub.Live.Components do
   end
 
   # ═══════════════════════════════════════════════════════════
+  # Nav Link (external route — <a href> instead of phx-click)
+  # ═══════════════════════════════════════════════════════════
+
+  def nav_link(assigns) do
+    assigns = assign_new(assigns, :badge, fn -> nil end)
+
+    ~H"""
+    <a
+      href={@href}
+      class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors duration-150 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50"
+    >
+      <span class="w-5 flex justify-center">
+        <%= render_icon(@icon, "w-4 h-4") %>
+      </span>
+      <span class="flex-1 text-left font-medium"><%= @label %></span>
+      <%= if @badge do %>
+        <.badge variant="secondary" class="text-[10px] px-1.5 py-0.5 bg-zinc-700 text-zinc-400 font-mono"><%= @badge %></.badge>
+      <% end %>
+    </a>
+    """
+  end
+
+  # ═══════════════════════════════════════════════════════════
   # Message Bubble
   # ═══════════════════════════════════════════════════════════
 
@@ -668,5 +691,12 @@ defmodule Hub.Live.Components do
   def render_icon(:hard_drive, class), do: Icons.hard_drive(%{class: class})
   def render_icon(:credit_card, class), do: Icons.credit_card(%{class: class})
   def render_icon(:kanban, class), do: Icons.kanban(%{class: class})
+  def render_icon(:webhook, class), do: Icons.webhook(%{class: class})
+  def render_icon(:cloud, class), do: Icons.cloud(%{class: class})
+  def render_icon(:user_plus, class), do: Icons.user_plus(%{class: class})
+  def render_icon(:file_search, class), do: Icons.file_search(%{class: class})
+  def render_icon(:smartphone, class), do: Icons.smartphone(%{class: class})
+  def render_icon(:plus, class), do: Icons.plus(%{class: class})
+  def render_icon(:server, class), do: Icons.server(%{class: class})
   def render_icon(_, _class), do: nil
 end
