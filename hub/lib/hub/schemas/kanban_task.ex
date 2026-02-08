@@ -15,7 +15,7 @@ defmodule Hub.Schemas.KanbanTask do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @lanes ~w(backlog ready in_progress review done cancelled)
+  @lanes ~w(backlog ready in_progress blocked review done archived cancelled)
   @priorities ~w(critical high medium low)
   @effort_levels ~w(trivial small medium large epic)
   @scopes ~w(fleet squad agent)

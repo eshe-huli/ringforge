@@ -3,7 +3,7 @@ defmodule Hub.Kanban do
   AI-native kanban task management.
 
   Multi-level (fleet/squad/agent) task board optimized for AI consumption.
-  Tasks flow through lanes: backlog → ready → in_progress → review → done
+  Tasks flow through lanes: backlog → ready → in_progress → blocked? → review → done
 
   This is the persistent counterpart to `Hub.Task` (ephemeral ETS-based).
   Kanban tasks have full lifecycle tracking, dependency management,
@@ -28,9 +28,11 @@ defmodule Hub.Kanban do
   @valid_transitions %{
     "backlog" => ~w(ready cancelled),
     "ready" => ~w(in_progress cancelled),
-    "in_progress" => ~w(review ready cancelled),
+    "in_progress" => ~w(review ready blocked cancelled),
+    "blocked" => ~w(in_progress ready cancelled),
     "review" => ~w(done in_progress cancelled),
-    "done" => ~w(cancelled),
+    "done" => ~w(cancelled archived),
+    "archived" => ~w(backlog),
     "cancelled" => ~w(backlog)
   }
 

@@ -2624,18 +2624,23 @@ defmodule Hub.Live.DashboardLive do
                   </button>
                   <span class="text-zinc-700">|</span>
                   <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
-                    <Icons.circle_dot class="w-3.5 h-3.5 inline text-green-400" />
-                    <span>Ready: <span class="font-medium text-green-400"><%= @ov_lane_counts["ready"] || 0 %></span></span>
+                    <Icons.circle_dot class="w-3.5 h-3.5 inline text-cyan-400" />
+                    <span>Ready: <span class="font-medium text-cyan-400"><%= @ov_lane_counts["ready"] || 0 %></span></span>
                   </button>
                   <span class="text-zinc-700">|</span>
                   <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
-                    <Icons.play class="w-3.5 h-3.5 inline text-blue-400" />
-                    <span>Active: <span class="font-medium text-blue-400"><%= @ov_lane_counts["in_progress"] || 0 %></span></span>
+                    <Icons.play class="w-3.5 h-3.5 inline text-amber-400" />
+                    <span>Active: <span class="font-medium text-amber-400"><%= @ov_lane_counts["in_progress"] || 0 %></span></span>
                   </button>
                   <span class="text-zinc-700">|</span>
                   <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
-                    <Icons.eye class="w-3.5 h-3.5 inline text-yellow-400" />
-                    <span>Review: <span class="font-medium text-yellow-400"><%= @ov_lane_counts["review"] || 0 %></span></span>
+                    <Icons.ban class="w-3.5 h-3.5 inline text-red-400" />
+                    <span>Blocked: <span class="font-medium text-red-400"><%= @ov_lane_counts["blocked"] || 0 %></span></span>
+                  </button>
+                  <span class="text-zinc-700">|</span>
+                  <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
+                    <Icons.eye class="w-3.5 h-3.5 inline text-purple-400" />
+                    <span>Review: <span class="font-medium text-purple-400"><%= @ov_lane_counts["review"] || 0 %></span></span>
                   </button>
                   <span class="text-zinc-700">|</span>
                   <button phx-click="navigate" phx-value-view="kanban" class="flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800/50 hover:bg-zinc-800 transition-colors text-zinc-400 hover:text-zinc-200">
@@ -4408,9 +4413,10 @@ defmodule Hub.Live.DashboardLive do
   defp render_kanban(assigns) do
     lanes = [
       {"backlog", "Backlog", "bg-zinc-800/50", "text-zinc-400", "border-zinc-700"},
-      {"ready", "Ready", "bg-green-500/10", "text-green-400", "border-green-500/20"},
-      {"in_progress", "In Progress", "bg-blue-500/10", "text-blue-400", "border-blue-500/20"},
-      {"review", "Review", "bg-yellow-500/10", "text-yellow-400", "border-yellow-500/20"},
+      {"ready", "Ready", "bg-cyan-500/10", "text-cyan-400", "border-cyan-500/20"},
+      {"in_progress", "In Progress", "bg-amber-500/10", "text-amber-400", "border-amber-500/20"},
+      {"blocked", "Blocked", "bg-red-500/10", "text-red-400", "border-red-500/20"},
+      {"review", "Review", "bg-purple-500/10", "text-purple-400", "border-purple-500/20"},
       {"done", "Done", "bg-emerald-500/10", "text-emerald-400", "border-emerald-500/20"}
     ]
 
@@ -4475,18 +4481,23 @@ defmodule Hub.Live.DashboardLive do
           </div>
           <span class="text-zinc-700">|</span>
           <div class="flex items-center gap-1.5 text-zinc-400">
-            <Icons.circle_dot class="w-3.5 h-3.5 inline text-green-400" />
-            <span>Ready: <span class="text-green-400 font-medium"><%= @lane_counts["ready"] || 0 %></span></span>
+            <Icons.circle_dot class="w-3.5 h-3.5 inline text-cyan-400" />
+            <span>Ready: <span class="text-cyan-400 font-medium"><%= @lane_counts["ready"] || 0 %></span></span>
           </div>
           <span class="text-zinc-700">|</span>
           <div class="flex items-center gap-1.5 text-zinc-400">
-            <Icons.play class="w-3.5 h-3.5 inline text-blue-400" />
-            <span>Active: <span class="text-blue-400 font-medium"><%= @lane_counts["in_progress"] || 0 %></span></span>
+            <Icons.play class="w-3.5 h-3.5 inline text-amber-400" />
+            <span>Active: <span class="text-amber-400 font-medium"><%= @lane_counts["in_progress"] || 0 %></span></span>
           </div>
           <span class="text-zinc-700">|</span>
           <div class="flex items-center gap-1.5 text-zinc-400">
-            <Icons.eye class="w-3.5 h-3.5 inline text-yellow-400" />
-            <span>Review: <span class="text-yellow-400 font-medium"><%= @lane_counts["review"] || 0 %></span></span>
+            <Icons.ban class="w-3.5 h-3.5 inline text-red-400" />
+            <span>Blocked: <span class="text-red-400 font-medium"><%= @lane_counts["blocked"] || 0 %></span></span>
+          </div>
+          <span class="text-zinc-700">|</span>
+          <div class="flex items-center gap-1.5 text-zinc-400">
+            <Icons.eye class="w-3.5 h-3.5 inline text-purple-400" />
+            <span>Review: <span class="text-purple-400 font-medium"><%= @lane_counts["review"] || 0 %></span></span>
           </div>
           <span class="text-zinc-700">|</span>
           <div class="flex items-center gap-1.5 text-zinc-400">
@@ -4792,7 +4803,7 @@ defmodule Hub.Live.DashboardLive do
                           <%= case artifact.status do %>
                             <% "approved" -> %><Icons.check_circle class="w-3.5 h-3.5 inline text-emerald-400" />
                             <% "rejected" -> %><Icons.x_circle class="w-3.5 h-3.5 inline text-red-400" />
-                            <% _ -> %><Icons.eye class="w-3.5 h-3.5 inline text-yellow-400" />
+                            <% _ -> %><Icons.eye class="w-3.5 h-3.5 inline text-purple-400" />
                           <% end %>
                         </span>
                         <div class="flex-1 min-w-0">
@@ -5108,11 +5119,13 @@ defmodule Hub.Live.DashboardLive do
   defp priority_icon(_), do: Icons.minus(%{class: "w-3 h-3 inline text-zinc-600"})
 
   defp lane_icon("backlog"), do: Icons.inbox(%{class: "w-3.5 h-3.5 inline text-zinc-400"})
-  defp lane_icon("ready"), do: Icons.circle_dot(%{class: "w-3.5 h-3.5 inline text-green-400"})
-  defp lane_icon("in_progress"), do: Icons.play(%{class: "w-3.5 h-3.5 inline text-blue-400"})
-  defp lane_icon("review"), do: Icons.eye(%{class: "w-3.5 h-3.5 inline text-yellow-400"})
+  defp lane_icon("ready"), do: Icons.circle_dot(%{class: "w-3.5 h-3.5 inline text-cyan-400"})
+  defp lane_icon("in_progress"), do: Icons.play(%{class: "w-3.5 h-3.5 inline text-amber-400"})
+  defp lane_icon("blocked"), do: Icons.ban(%{class: "w-3.5 h-3.5 inline text-red-400"})
+  defp lane_icon("review"), do: Icons.eye(%{class: "w-3.5 h-3.5 inline text-purple-400"})
   defp lane_icon("done"), do: Icons.check_circle(%{class: "w-3.5 h-3.5 inline text-emerald-400"})
-  defp lane_icon("cancelled"), do: Icons.ban(%{class: "w-3.5 h-3.5 inline text-red-400"})
+  defp lane_icon("archived"), do: Icons.folder(%{class: "w-3.5 h-3.5 inline text-zinc-500"})
+  defp lane_icon("cancelled"), do: Icons.x_circle(%{class: "w-3.5 h-3.5 inline text-red-400"})
   defp lane_icon(_), do: Icons.minus(%{class: "w-3.5 h-3.5 inline text-zinc-600"})
 
   defp effort_short("trivial"), do: "XS"
@@ -5135,10 +5148,12 @@ defmodule Hub.Live.DashboardLive do
   defp format_file_size(bytes), do: "#{Float.round(bytes / (1024 * 1024), 1)} MB"
 
   defp lane_badge_style("backlog"), do: "bg-zinc-800/50 text-zinc-400 border-zinc-700"
-  defp lane_badge_style("ready"), do: "bg-green-500/10 text-green-400 border-green-500/20"
-  defp lane_badge_style("in_progress"), do: "bg-blue-500/10 text-blue-400 border-blue-500/20"
-  defp lane_badge_style("review"), do: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20"
+  defp lane_badge_style("ready"), do: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
+  defp lane_badge_style("in_progress"), do: "bg-amber-500/10 text-amber-400 border-amber-500/20"
+  defp lane_badge_style("blocked"), do: "bg-red-500/10 text-red-400 border-red-500/20"
+  defp lane_badge_style("review"), do: "bg-purple-500/10 text-purple-400 border-purple-500/20"
   defp lane_badge_style("done"), do: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+  defp lane_badge_style("archived"), do: "bg-zinc-800/50 text-zinc-500 border-zinc-700"
   defp lane_badge_style("cancelled"), do: "bg-red-500/10 text-red-400 border-red-500/20"
   defp lane_badge_style(_), do: "bg-zinc-800 text-zinc-400 border-zinc-700"
 
