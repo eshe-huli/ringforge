@@ -38,6 +38,10 @@ defmodule Hub.Auth.Agent do
     belongs_to :fleet, Hub.Auth.Fleet
     belongs_to :squad, Hub.Groups.Group
     belongs_to :registered_via_key, Hub.Auth.ApiKey
+    belongs_to :role_template, Hub.Schemas.RoleTemplate
+
+    field :context_tier, :string
+    field :tier_calibrated_at, :utc_datetime
 
     has_many :sessions, Hub.Auth.AgentSession
 
@@ -48,7 +52,8 @@ defmodule Hub.Auth.Agent do
     :agent_id, :name, :display_name, :public_key, :framework, :capabilities,
     :last_seen_at, :tenant_id, :fleet_id, :squad_id, :registered_via_key_id,
     :avatar_url, :description, :tags, :metadata,
-    :total_connections, :total_messages
+    :total_connections, :total_messages,
+    :role_template_id, :context_tier, :tier_calibrated_at
   ]
 
   @profile_fields [:display_name, :avatar_url, :description, :tags, :metadata]

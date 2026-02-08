@@ -119,6 +119,11 @@ defmodule Hub.Router do
     get "/:provider/callback", AuthController, :callback
   end
 
+  scope "/", Hub do
+    pipe_through :browser
+    get "/", RedirectController, :to_dashboard
+  end
+
   scope "/", Hub.Live do
     pipe_through :browser
     live "/dashboard", DashboardLive

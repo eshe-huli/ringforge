@@ -29,6 +29,7 @@ defmodule Hub.Socket do
         |> assign(:fleet_id, agent.fleet_id)
         |> assign(:agent_id, agent.agent_id)
         |> assign(:agent_db_id, agent.id)
+        |> assign(:squad_id, agent.squad_id)
         |> assign(:auth_mode, :registration)
 
       {:ok, socket}
@@ -55,6 +56,7 @@ defmodule Hub.Socket do
         |> assign(:fleet_id, agent.fleet_id)
         |> assign(:agent_id, agent.agent_id)
         |> assign(:agent_db_id, agent.id)
+        |> assign(:squad_id, agent.squad_id)
         |> assign(:auth_mode, :reconnect)
 
       {:ok, socket}
@@ -96,6 +98,7 @@ defmodule Hub.Socket do
         |> assign(:fleet_id, agent.fleet_id)
         |> assign(:agent_id, agent.agent_id)
         |> assign(:agent_db_id, agent.id)
+        |> assign(:squad_id, agent.squad_id)
         |> assign(:auth_mode, :challenge)
 
       {:ok, socket}

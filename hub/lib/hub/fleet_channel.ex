@@ -144,8 +144,45 @@ defmodule Hub.FleetChannel do
     # Subscribe to agent-specific direct delivery topic
     Phoenix.PubSub.subscribe(Hub.PubSub, "fleet:#{socket.assigns.fleet_id}:agent:#{socket.assigns.agent_id}")
 
+    # Squad PubSub subscription — if agent has a squad_id, subscribe to squad topic
+    socket = if squad_id = socket.assigns[:squad_id] do
+      Phoenix.PubSub.subscribe(Hub.PubSub, "squad:#{squad_id}")
+
+      # Broadcast squad presence to squadmates
+      squad_meta = %{
+        "agent_id" => socket.assigns.agent_id,
+        "name" => meta[:name],
+        "state" => meta[:state],
+        "task" => meta[:task],
+        "connected_at" => meta[:connected_at]
+      }
+
+      Phoenix.PubSub.broadcast(Hub.PubSub, "squad:#{squad_id}", {:squad_presence, %{
+        "type" => "squad",
+        "event" => "presence",
+        "payload" => Map.put(squad_meta, "action", "joined")
+      }})
+
+      assign(socket, :squad_id, squad_id)
+    else
+      socket
+    end
+
     # Ensure webhook subscriber is listening to this fleet's topic
     Hub.WebhookSubscriber.subscribe_fleet(socket.assigns.fleet_id)
+
+    # Push role context if agent has a role assigned
+    if agent do
+      case Hub.ContextInjection.build_role_context(agent) do
+        nil -> :ok
+        role_ctx ->
+          push(socket, "role:context", %{
+            "type" => "role",
+            "event" => "context",
+            "payload" => role_ctx
+          })
+      end
+    end
 
     # Deliver queued direct messages (async, don't block join)
     fleet_id = socket.assigns.fleet_id
@@ -235,6 +272,43 @@ defmodule Hub.FleetChannel do
     {:noreply, socket}
   end
 
+  # ── Squad PubSub delivery ────────────────────────────────────
+
+  # Squad presence changes (from PubSub)
+  def handle_info({:squad_presence, msg}, socket) do
+    push(socket, "squad:presence", msg)
+    {:noreply, socket}
+  end
+
+  # Squad memory changes (from PubSub)
+  def handle_info({:squad_memory_changed, event}, socket) do
+    push(socket, "squad:memory:changed", %{
+      "type" => "squad",
+      "event" => "memory:changed",
+      "payload" => %{
+        "key" => event.key,
+        "action" => event.action,
+        "author" => event.author,
+        "squad_id" => event.squad_id,
+        "timestamp" => event.timestamp
+      }
+    })
+
+    {:noreply, socket}
+  end
+
+  # Squad activity delivery (from PubSub)
+  def handle_info({:squad_activity, msg}, socket) do
+    push(socket, "squad:activity:broadcast", msg)
+    {:noreply, socket}
+  end
+
+  # Squad task assignment delivery (from PubSub)
+  def handle_info({:squad_task_assigned, msg}, socket) do
+    push(socket, "squad:task:assigned", msg)
+    {:noreply, socket}
+  end
+
   # ── presence:update — client updates their state ───────────
 
   @impl true
@@ -261,18 +335,29 @@ defmodule Hub.FleetChannel do
       # Update presence tracking
       FleetPresence.update(socket, socket.assigns.agent_id, updated_meta)
 
-      # Broadcast state change
+      # Broadcast state change to fleet
+      state_payload = %{
+        "agent_id" => socket.assigns.agent_id,
+        "name" => updated_meta[:name],
+        "state" => updated_meta[:state],
+        "task" => updated_meta[:task],
+        "load" => updated_meta[:load]
+      }
+
       broadcast!(socket, "presence:state_changed", %{
         "type" => "presence",
         "event" => "state_changed",
-        "payload" => %{
-          "agent_id" => socket.assigns.agent_id,
-          "name" => updated_meta[:name],
-          "state" => updated_meta[:state],
-          "task" => updated_meta[:task],
-          "load" => updated_meta[:load]
-        }
+        "payload" => state_payload
       })
+
+      # Also broadcast to squad topic if agent is in a squad
+      if squad_id = socket.assigns[:squad_id] do
+        Phoenix.PubSub.broadcast(Hub.PubSub, "squad:#{squad_id}", {:squad_presence, %{
+          "type" => "squad",
+          "event" => "presence",
+          "payload" => Map.put(state_payload, "action", "state_changed")
+        }})
+      end
 
       {:reply, {:ok, %{status: "updated"}}, socket}
     end
@@ -1682,6 +1767,821 @@ defmodule Hub.FleetChannel do
     }}, socket}
   end
 
+  # ── Routed Messaging Handlers ─────────────────────────────
+
+  # Replaces raw direct:send with hierarchy-aware routing
+  def handle_in("message:send", %{"payload" => %{"to" => to, "body" => body} = payload}, socket) do
+    message = %{
+      "body" => body,
+      "refs" => Map.get(payload, "refs", []),
+      "metadata" => Map.get(payload, "metadata", %{}),
+      "priority" => Map.get(payload, "priority", "normal")
+    }
+
+    case Hub.Messaging.Router.route_dm(socket.assigns.fleet_id, socket.assigns.agent_id, to, message) do
+      {:ok, _} ->
+        {:reply, {:ok, %{"type" => "message", "event" => "sent", "payload" => %{"to" => to}}}, socket}
+
+      {:denied, reason, suggestion} ->
+        {:reply, {:error, %{
+          "reason" => "messaging_restricted",
+          "message" => reason,
+          "suggestion" => suggestion
+        }}, socket}
+
+      {:limited, retry_after} ->
+        {:reply, {:error, %{
+          "reason" => "rate_limited",
+          "retry_after_ms" => retry_after
+        }}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("message:send", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_to_or_body"}}, socket}
+  end
+
+  # Escalation: route through hierarchy
+  def handle_in("message:escalate", %{"payload" => payload}, socket) do
+    target_role = Map.get(payload, "target_role")
+    attrs = %{
+      subject: Map.get(payload, "subject", "Escalation"),
+      body: Map.get(payload, "body", ""),
+      priority: Map.get(payload, "priority", "normal"),
+      context_refs: Map.get(payload, "context_refs", [])
+    }
+
+    case Hub.Messaging.Router.route_escalation(
+      socket.assigns.fleet_id, socket.assigns.agent_id, target_role, attrs
+    ) do
+      {:ok, escalation} ->
+        {:reply, {:ok, %{
+          "type" => "message",
+          "event" => "escalated",
+          "payload" => %{
+            "escalation_id" => escalation.id,
+            "routed_to" => escalation.handler_agent,
+            "status" => escalation.status
+          }
+        }}, socket}
+
+      {:denied, reason} ->
+        {:reply, {:error, %{"reason" => reason}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("message:escalate", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_payload"}}, socket}
+  end
+
+  # Escalation management (for squad leaders)
+  def handle_in("escalation:pending", _payload, socket) do
+    pending = Hub.Messaging.Escalation.list_pending(
+      socket.assigns.fleet_id, socket.assigns.agent_id
+    )
+
+    {:reply, {:ok, %{
+      "type" => "escalation",
+      "event" => "pending",
+      "payload" => %{"escalations" => pending}
+    }}, socket}
+  end
+
+  def handle_in("escalation:forward", %{"payload" => %{"escalation_id" => esc_id, "to" => to}}, socket) do
+    case Hub.Messaging.Escalation.forward_escalation(esc_id, socket.assigns.agent_id, to) do
+      :ok -> {:reply, {:ok, %{"type" => "escalation", "event" => "forwarded"}}, socket}
+      {:error, reason} -> {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("escalation:handle", %{"payload" => %{"escalation_id" => esc_id, "response" => resp}}, socket) do
+    case Hub.Messaging.Escalation.handle_escalation(esc_id, socket.assigns.agent_id, resp) do
+      :ok -> {:reply, {:ok, %{"type" => "escalation", "event" => "handled"}}, socket}
+      {:error, reason} -> {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("escalation:reject", %{"payload" => %{"escalation_id" => esc_id, "reason" => reason}}, socket) do
+    case Hub.Messaging.Escalation.reject_escalation(esc_id, socket.assigns.agent_id, reason) do
+      :ok -> {:reply, {:ok, %{"type" => "escalation", "event" => "rejected"}}, socket}
+      {:error, reason} -> {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  # Broadcast (tier 1+ only)
+  def handle_in("message:broadcast", %{"payload" => %{"scope" => scope, "body" => body} = payload}, socket) do
+    message = %{
+      "body" => body,
+      "priority" => Map.get(payload, "priority", "normal"),
+      "metadata" => Map.get(payload, "metadata", %{})
+    }
+
+    case Hub.Messaging.Router.route_broadcast(socket.assigns.fleet_id, socket.assigns.agent_id, scope, message) do
+      {:ok, count} ->
+        {:reply, {:ok, %{
+          "type" => "message",
+          "event" => "broadcasted",
+          "payload" => %{"scope" => scope, "delivered_to" => count}
+        }}, socket}
+
+      {:denied, reason, _} ->
+        {:reply, {:error, %{"reason" => reason}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("message:broadcast", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_scope_or_body"}}, socket}
+  end
+
+  # Announcement (one-way, tier 0-1 only)
+  def handle_in("message:announce", %{"payload" => %{"scope" => scope} = payload}, socket) do
+    attrs = %{
+      body: Map.get(payload, "body", ""),
+      priority: Map.get(payload, "priority", "normal"),
+      metadata: Map.get(payload, "metadata", %{})
+    }
+
+    case Hub.Messaging.Announcements.announce(
+      socket.assigns.fleet_id, socket.assigns.agent_id, scope, attrs
+    ) do
+      {:ok, count} ->
+        {:reply, {:ok, %{
+          "type" => "message",
+          "event" => "announced",
+          "payload" => %{"scope" => scope, "delivered_to" => count}
+        }}, socket}
+
+      {:denied, reason} ->
+        {:reply, {:error, %{"reason" => reason}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("message:announce", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_scope"}}, socket}
+  end
+
+  # Thread: create
+  def handle_in("thread:create", %{"payload" => payload}, socket) do
+    attrs = %{
+      subject: Map.get(payload, "subject", "Untitled"),
+      scope: Map.get(payload, "scope", "dm"),
+      participant_ids: Map.get(payload, "participants", [socket.assigns.agent_id]),
+      task_id: Map.get(payload, "task_id"),
+      fleet_id: socket.assigns.fleet_id,
+      squad_id: socket.assigns[:squad_id],
+      tenant_id: socket.assigns.tenant_id,
+      created_by: socket.assigns.agent_id
+    }
+
+    case Hub.Messaging.Threads.create_thread(attrs) do
+      {:ok, thread} ->
+        # Subscribe creator to thread topic
+        Phoenix.PubSub.subscribe(Hub.PubSub, "thread:#{thread.thread_id}")
+
+        {:reply, {:ok, %{
+          "type" => "thread",
+          "event" => "created",
+          "payload" => Hub.Messaging.Threads.thread_to_wire(thread)
+        }}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("thread:create", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_payload"}}, socket}
+  end
+
+  # Thread: reply
+  def handle_in("thread:reply", %{"payload" => %{"thread_id" => thread_id, "body" => body} = payload}, socket) do
+    message_attrs = %{
+      body: body,
+      refs: Map.get(payload, "refs", []),
+      metadata: Map.get(payload, "metadata", %{})
+    }
+
+    case Hub.Messaging.Threads.add_message(thread_id, socket.assigns.agent_id, message_attrs) do
+      {:ok, msg} ->
+        {:reply, {:ok, %{
+          "type" => "thread",
+          "event" => "message",
+          "payload" => msg
+        }}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("thread:reply", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_thread_id_or_body"}}, socket}
+  end
+
+  # Thread: list messages
+  def handle_in("thread:messages", %{"payload" => %{"thread_id" => thread_id} = payload}, socket) do
+    opts = [
+      limit: Map.get(payload, "limit", 50),
+      before: Map.get(payload, "before")
+    ]
+
+    messages = Hub.Messaging.Threads.thread_messages(thread_id, opts)
+
+    {:reply, {:ok, %{
+      "type" => "thread",
+      "event" => "messages",
+      "payload" => %{"thread_id" => thread_id, "messages" => messages}
+    }}, socket}
+  end
+
+  def handle_in("thread:messages", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_thread_id"}}, socket}
+  end
+
+  # Thread: list my threads
+  def handle_in("thread:list", _payload, socket) do
+    threads = Hub.Messaging.Threads.my_threads(socket.assigns.agent_id, socket.assigns.fleet_id)
+
+    {:reply, {:ok, %{
+      "type" => "thread",
+      "event" => "list",
+      "payload" => %{"threads" => Enum.map(threads, &Hub.Messaging.Threads.thread_to_wire/1)}
+    }}, socket}
+  end
+
+  # Thread: close
+  def handle_in("thread:close", %{"payload" => %{"thread_id" => thread_id} = payload}, socket) do
+    reason = Map.get(payload, "reason", "closed by agent")
+
+    case Hub.Messaging.Threads.close_thread(thread_id, socket.assigns.agent_id, reason) do
+      {:ok, thread} ->
+        {:reply, {:ok, %{
+          "type" => "thread",
+          "event" => "closed",
+          "payload" => Hub.Messaging.Threads.thread_to_wire(thread)
+        }}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("thread:close", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_thread_id"}}, socket}
+  end
+
+  # Business rules management (fleet admin only)
+  def handle_in("rules:list", _payload, socket) do
+    rules = Hub.Messaging.BusinessRules.load_rules(socket.assigns.fleet_id)
+    {:reply, {:ok, %{"type" => "rules", "event" => "list", "payload" => %{"rules" => rules}}}, socket}
+  end
+
+  def handle_in("rules:add", %{"payload" => rule}, socket) do
+    case Hub.Messaging.BusinessRules.add_rule(socket.assigns.fleet_id, rule) do
+      :ok -> {:reply, {:ok, %{"type" => "rules", "event" => "added"}}, socket}
+      {:error, reason} -> {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("rules:remove", %{"payload" => %{"rule_id" => rule_id}}, socket) do
+    case Hub.Messaging.BusinessRules.remove_rule(socket.assigns.fleet_id, rule_id) do
+      :ok -> {:reply, {:ok, %{"type" => "rules", "event" => "removed"}}, socket}
+      {:error, reason} -> {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  # Thread PubSub notifications
+  def handle_info({:thread_message, msg}, socket) do
+    push(socket, "thread:message", %{
+      "type" => "thread",
+      "event" => "message",
+      "payload" => msg
+    })
+    {:noreply, socket}
+  end
+
+  def handle_info({:thread_closed, msg}, socket) do
+    push(socket, "thread:closed", %{
+      "type" => "thread",
+      "event" => "closed",
+      "payload" => msg
+    })
+    {:noreply, socket}
+  end
+
+  # Escalation notifications (from Hub.Messaging.Escalation via PubSub)
+  def handle_info({:message, {:escalation_new, esc}}, socket) do
+    push(socket, "escalation:received", %{
+      "type" => "escalation", "event" => "new", "payload" => esc
+    })
+    {:noreply, socket}
+  end
+
+  def handle_info({:message, {:escalation_forwarded, esc}}, socket) do
+    push(socket, "escalation:update", %{
+      "type" => "escalation", "event" => "forwarded", "payload" => esc
+    })
+    {:noreply, socket}
+  end
+
+  def handle_info({:message, {:escalation_handled, esc}}, socket) do
+    push(socket, "escalation:update", %{
+      "type" => "escalation", "event" => "handled", "payload" => esc
+    })
+    {:noreply, socket}
+  end
+
+  def handle_info({:message, {:escalation_rejected, esc}}, socket) do
+    push(socket, "escalation:update", %{
+      "type" => "escalation", "event" => "rejected", "payload" => esc
+    })
+    {:noreply, socket}
+  end
+
+  def handle_info({:message, {:escalation_auto_forwarded, esc}}, socket) do
+    push(socket, "escalation:update", %{
+      "type" => "escalation", "event" => "auto_forwarded", "payload" => esc
+    })
+    {:noreply, socket}
+  end
+
+  # Announcement push
+  def handle_info({:announcement, ann}, socket) do
+    push(socket, "message:announcement", %{
+      "type" => "message",
+      "event" => "announcement",
+      "payload" => ann
+    })
+    {:noreply, socket}
+  end
+
+  # ── Kanban Handlers ──────────────────────────────────────
+
+  def handle_in("kanban:fleet_board", _payload, socket) do
+    board = Hub.Kanban.fleet_board(socket.assigns.fleet_id)
+    stats = Hub.Kanban.board_stats(socket.assigns.fleet_id)
+
+    {:reply, {:ok, %{
+      "type" => "kanban",
+      "event" => "fleet_board",
+      "payload" => %{"board" => board, "stats" => stats}
+    }}, socket}
+  end
+
+  def handle_in("kanban:squad_board", _payload, socket) do
+    case socket.assigns[:squad_id] do
+      nil ->
+        {:reply, {:error, %{"reason" => "no_squad", "message" => "Not assigned to a squad"}}, socket}
+
+      squad_id ->
+        board = Hub.Kanban.squad_board(squad_id)
+        {:reply, {:ok, %{
+          "type" => "kanban",
+          "event" => "squad_board",
+          "payload" => %{"board" => board}
+        }}, socket}
+    end
+  end
+
+  def handle_in("kanban:my_queue", _payload, socket) do
+    queue = Hub.Kanban.agent_queue(socket.assigns.agent_id, socket.assigns.fleet_id)
+
+    {:reply, {:ok, %{
+      "type" => "kanban",
+      "event" => "my_queue",
+      "payload" => %{"tasks" => Enum.map(queue, &kanban_task_to_wire/1)}
+    }}, socket}
+  end
+
+  def handle_in("kanban:next", _payload, socket) do
+    case Hub.Kanban.next_task(socket.assigns.agent_id, socket.assigns.fleet_id) do
+      nil ->
+        {:reply, {:ok, %{
+          "type" => "kanban",
+          "event" => "next",
+          "payload" => %{"task" => nil, "message" => "No tasks available"}
+        }}, socket}
+
+      task ->
+        {:reply, {:ok, %{
+          "type" => "kanban",
+          "event" => "next",
+          "payload" => %{"task" => kanban_task_to_wire(task)}
+        }}, socket}
+    end
+  end
+
+  def handle_in("kanban:create", %{"payload" => payload}, socket) do
+    attrs =
+      payload
+      |> Map.put("created_by", socket.assigns.agent_id)
+      |> Map.put("tenant_id", socket.assigns.tenant_id)
+      |> maybe_put_squad(socket)
+
+    case Hub.Kanban.create_task(socket.assigns.fleet_id, attrs) do
+      {:ok, task} ->
+        # Broadcast to fleet
+        broadcast!(socket, "kanban:task_created", %{
+          "type" => "kanban",
+          "event" => "task_created",
+          "payload" => kanban_task_to_wire(task)
+        })
+
+        # Also broadcast to squad if applicable
+        if task.squad_id do
+          Phoenix.PubSub.broadcast(Hub.PubSub, "squad:#{task.squad_id}", {:kanban_event, %{
+            "event" => "task_created",
+            "task" => kanban_task_to_wire(task)
+          }})
+        end
+
+        {:reply, {:ok, %{
+          "type" => "kanban",
+          "event" => "created",
+          "payload" => kanban_task_to_wire(task)
+        }}, socket}
+
+      {:error, cs} when is_struct(cs, Ecto.Changeset) ->
+        {:reply, {:error, %{"reason" => "validation_error", "errors" => inspect(cs.errors)}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("kanban:create", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_payload"}}, socket}
+  end
+
+  def handle_in("kanban:update", %{"payload" => %{"task_id" => task_id} = payload}, socket) do
+    attrs = Map.drop(payload, ["task_id"])
+
+    case Hub.Kanban.update_task(task_id, attrs) do
+      {:ok, task} ->
+        broadcast!(socket, "kanban:task_updated", %{
+          "type" => "kanban",
+          "event" => "task_updated",
+          "payload" => kanban_task_to_wire(task)
+        })
+
+        {:reply, {:ok, %{
+          "type" => "kanban",
+          "event" => "updated",
+          "payload" => kanban_task_to_wire(task)
+        }}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("kanban:update", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_task_id"}}, socket}
+  end
+
+  def handle_in("kanban:move", %{"payload" => %{"task_id" => task_id, "lane" => lane}}, socket) do
+    reason = Map.get(socket.assigns, :move_reason)
+
+    case Hub.Kanban.move_task(task_id, lane, socket.assigns.agent_id, reason) do
+      {:ok, task} ->
+        broadcast!(socket, "kanban:task_moved", %{
+          "type" => "kanban",
+          "event" => "task_moved",
+          "payload" => %{
+            "task" => kanban_task_to_wire(task),
+            "new_lane" => lane,
+            "moved_by" => socket.assigns.agent_id
+          }
+        })
+
+        {:reply, {:ok, %{
+          "type" => "kanban",
+          "event" => "moved",
+          "payload" => kanban_task_to_wire(task)
+        }}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("kanban:move", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_task_id_or_lane"}}, socket}
+  end
+
+  def handle_in("kanban:claim", %{"payload" => %{"task_id" => task_id}}, socket) do
+    with {:ok, task} <- Hub.Kanban.get_task(task_id),
+         {:ok, task} <- Hub.Kanban.update_task(task_id, %{"assigned_to" => socket.assigns.agent_id}),
+         {:ok, task} <- Hub.Kanban.move_task(task_id, "in_progress", socket.assigns.agent_id, "claimed") do
+      broadcast!(socket, "kanban:task_claimed", %{
+        "type" => "kanban",
+        "event" => "task_claimed",
+        "payload" => %{
+          "task" => kanban_task_to_wire(task),
+          "claimed_by" => socket.assigns.agent_id
+        }
+      })
+
+      {:reply, {:ok, %{
+        "type" => "kanban",
+        "event" => "claimed",
+        "payload" => kanban_task_to_wire(task)
+      }}, socket}
+    else
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("kanban:claim", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_task_id"}}, socket}
+  end
+
+  def handle_in("kanban:progress", %{"payload" => %{"task_id" => task_id} = payload}, socket) do
+    progress_text = Map.get(payload, "progress")
+    progress_pct = Map.get(payload, "pct")
+
+    attrs =
+      %{}
+      |> then(fn a -> if progress_text, do: Map.put(a, "progress", progress_text), else: a end)
+      |> then(fn a -> if progress_pct, do: Map.put(a, "progress_pct", progress_pct), else: a end)
+
+    case Hub.Kanban.update_task(task_id, attrs) do
+      {:ok, task} ->
+        broadcast!(socket, "kanban:task_progress", %{
+          "type" => "kanban",
+          "event" => "task_progress",
+          "payload" => %{
+            "task_id" => task.task_id,
+            "progress" => task.progress,
+            "progress_pct" => task.progress_pct,
+            "updated_by" => socket.assigns.agent_id
+          }
+        })
+
+        {:reply, {:ok, %{"type" => "kanban", "event" => "progress_updated"}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("kanban:progress", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_task_id"}}, socket}
+  end
+
+  def handle_in("kanban:block", %{"payload" => %{"task_id" => task_id, "reason" => reason}}, socket) do
+    case Hub.Kanban.update_task(task_id, %{"blocked_by" => [reason]}) do
+      {:ok, task} ->
+        broadcast!(socket, "kanban:task_blocked", %{
+          "type" => "kanban",
+          "event" => "task_blocked",
+          "payload" => %{
+            "task" => kanban_task_to_wire(task),
+            "blocked_by" => socket.assigns.agent_id,
+            "reason" => reason
+          }
+        })
+
+        {:reply, {:ok, %{"type" => "kanban", "event" => "blocked"}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("kanban:block", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_task_id_or_reason"}}, socket}
+  end
+
+  def handle_in("kanban:stats", _payload, socket) do
+    stats = Hub.Kanban.board_stats(socket.assigns.fleet_id)
+    velocity = Hub.Kanban.velocity(socket.assigns.fleet_id, 24)
+    cycle = Hub.Kanban.cycle_time(socket.assigns.fleet_id)
+
+    {:reply, {:ok, %{
+      "type" => "kanban",
+      "event" => "stats",
+      "payload" => %{
+        "stats" => stats,
+        "velocity_24h" => velocity,
+        "avg_cycle_time_hours" => cycle
+      }
+    }}, socket}
+  end
+
+  def handle_in("kanban:prioritize", %{"payload" => %{"task_id" => task_id, "priority" => priority}}, socket) do
+    case Hub.Kanban.update_task(task_id, %{"priority" => priority}) do
+      {:ok, task} ->
+        broadcast!(socket, "kanban:task_prioritized", %{
+          "type" => "kanban",
+          "event" => "task_prioritized",
+          "payload" => %{"task_id" => task.task_id, "priority" => priority, "by" => socket.assigns.agent_id}
+        })
+
+        {:reply, {:ok, %{"type" => "kanban", "event" => "prioritized"}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("kanban:prioritize", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_task_id_or_priority"}}, socket}
+  end
+
+  def handle_in("kanban:history", %{"payload" => %{"task_id" => task_id}}, socket) do
+    history = Hub.Kanban.task_history(task_id)
+
+    {:reply, {:ok, %{
+      "type" => "kanban",
+      "event" => "history",
+      "payload" => %{"task_id" => task_id, "history" => history}
+    }}, socket}
+  end
+
+  def handle_in("kanban:history", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_task_id"}}, socket}
+  end
+
+  # Kanban event from PubSub (squad-scoped)
+  def handle_info({:kanban_event, event}, socket) do
+    push(socket, "kanban:event", %{
+      "type" => "kanban",
+      "event" => event["event"],
+      "payload" => event
+    })
+
+    {:noreply, socket}
+  end
+
+  # ── Role & Context Injection Handlers ─────────────────────
+
+  def handle_in("role:list", _payload, socket) do
+    roles = Hub.Roles.list_roles(socket.assigns.tenant_id)
+    {:reply, {:ok, %{
+      "type" => "role",
+      "event" => "list",
+      "payload" => %{"roles" => Enum.map(roles, &Hub.Roles.to_wire/1)}
+    }}, socket}
+  end
+
+  def handle_in("role:info", _payload, socket) do
+    case Hub.Roles.agent_role_context(socket.assigns.agent_id) do
+      nil ->
+        {:reply, {:ok, %{
+          "type" => "role",
+          "event" => "info",
+          "payload" => %{"role" => nil, "message" => "No role assigned"}
+        }}, socket}
+
+      ctx ->
+        {:reply, {:ok, %{
+          "type" => "role",
+          "event" => "info",
+          "payload" => %{"role" => ctx}
+        }}, socket}
+    end
+  end
+
+  def handle_in("role:context", _payload, socket) do
+    agent = fetch_agent(socket)
+
+    case Hub.ContextInjection.build_role_context(agent) do
+      nil ->
+        {:reply, {:ok, %{
+          "type" => "role",
+          "event" => "context",
+          "payload" => %{"context" => nil, "message" => "No role assigned"}
+        }}, socket}
+
+      role_ctx ->
+        {:reply, {:ok, %{
+          "type" => "role",
+          "event" => "context",
+          "payload" => role_ctx
+        }}, socket}
+    end
+  end
+
+  def handle_in("role:assign", %{"payload" => %{"slug" => slug}}, socket) do
+    case Hub.Roles.assign_role_by_slug(socket.assigns.agent_id, slug, socket.assigns.tenant_id) do
+      {:ok, agent} ->
+        # Push new role context immediately
+        case Hub.ContextInjection.build_role_context(agent) do
+          nil -> :ok
+          ctx -> push(socket, "role:context", %{"type" => "role", "event" => "context", "payload" => ctx})
+        end
+
+        {:reply, {:ok, %{
+          "type" => "role",
+          "event" => "assigned",
+          "payload" => %{"slug" => slug, "agent_id" => socket.assigns.agent_id}
+        }}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+    end
+  end
+
+  def handle_in("role:assign", %{"payload" => %{"agent_id" => target, "slug" => slug}}, socket) do
+    # Squad leaders can assign roles to squad members
+    with squad_id when not is_nil(squad_id) <- socket.assigns[:squad_id],
+         {:ok, role} <- Hub.Groups.member_role(get_group_id_for_squad(squad_id), socket.assigns.agent_id),
+         true <- role in ["admin", "owner", "leader"] do
+      case Hub.Roles.assign_role_by_slug(target, slug, socket.assigns.tenant_id) do
+        {:ok, _} ->
+          # Notify target agent
+          Phoenix.PubSub.broadcast(Hub.PubSub,
+            "fleet:#{socket.assigns.fleet_id}:agent:#{target}",
+            {:role_assigned, %{"slug" => slug, "assigned_by" => socket.assigns.agent_id}}
+          )
+
+          {:reply, {:ok, %{
+            "type" => "role",
+            "event" => "assigned",
+            "payload" => %{"slug" => slug, "agent_id" => target}
+          }}, socket}
+
+        {:error, reason} ->
+          {:reply, {:error, %{"reason" => to_string(reason)}}, socket}
+      end
+    else
+      _ -> {:reply, {:error, %{"reason" => "unauthorized", "message" => "Only squad leaders can assign roles to others"}}, socket}
+    end
+  end
+
+  def handle_in("role:assign", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_slug", "message" => "Provide slug or {agent_id, slug}"}}, socket}
+  end
+
+  def handle_in("agent:calibrate", _payload, socket) do
+    challenge = Hub.ContextInjection.calibration_challenge()
+    socket = assign(socket, :calibration_challenge_id, challenge["challenge_id"])
+
+    {:reply, {:ok, %{
+      "type" => "calibration",
+      "event" => "challenge",
+      "payload" => challenge
+    }}, socket}
+  end
+
+  def handle_in("agent:calibrate_response", %{"payload" => %{"response" => response}}, socket) do
+    result = Hub.ContextInjection.evaluate_calibration(response)
+
+    # Store tier on agent
+    agent = fetch_agent(socket)
+    if agent do
+      Hub.Auth.Agent.changeset(agent, %{
+        context_tier: result.tier,
+        tier_calibrated_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+      |> Hub.Repo.update()
+    end
+
+    {:reply, {:ok, %{
+      "type" => "calibration",
+      "event" => "result",
+      "payload" => %{
+        "tier" => result.tier,
+        "score" => result.score,
+        "max_score" => result.max_score
+      }
+    }}, socket}
+  end
+
+  def handle_in("agent:calibrate_response", _payload, socket) do
+    {:reply, {:error, %{"reason" => "missing_response"}}, socket}
+  end
+
+  # Notify agent when their role is assigned by a leader
+  def handle_info({:role_assigned, msg}, socket) do
+    case Hub.ContextInjection.build_role_context(fetch_agent(socket)) do
+      nil -> :ok
+      ctx -> push(socket, "role:context", %{"type" => "role", "event" => "context", "payload" => ctx})
+    end
+
+    push(socket, "role:assigned", %{
+      "type" => "role",
+      "event" => "assigned",
+      "payload" => msg
+    })
+
+    {:noreply, socket}
+  end
+
   # ── Device Handlers (IoT/Domotic) ────────────────────────
 
   def handle_in("device:register", %{"payload" => payload}, socket) do
@@ -1789,6 +2689,387 @@ defmodule Hub.FleetChannel do
     }}, socket}
   end
 
+  # ── Squad Handlers ─────────────────────────────────────────
+
+  # squad:roster — returns only agents in caller's squad
+  def handle_in("squad:roster", _payload, socket) do
+    case socket.assigns[:squad_id] do
+      nil ->
+        {:reply, {:error, %{reason: "no_squad", message: "You are not assigned to a squad."}}, socket}
+
+      squad_id ->
+        # Get all agents in this squad from the fleet presence list
+        topic = "fleet:#{socket.assigns.fleet_id}"
+        all_presence = FleetPresence.list(topic)
+
+        # Look up which agent_ids are in this squad
+        squad_agent_ids = get_squad_agent_ids(squad_id)
+
+        squad_roster =
+          all_presence
+          |> Enum.filter(fn {agent_id, _} -> agent_id in squad_agent_ids end)
+          |> Enum.flat_map(fn {agent_id, %{metas: metas}} ->
+            Enum.map(metas, fn meta -> presence_payload(agent_id, meta) end)
+          end)
+
+        {:reply, {:ok, %{
+          "type" => "squad",
+          "event" => "roster",
+          "payload" => %{"agents" => squad_roster, "squad_id" => squad_id}
+        }}, socket}
+    end
+  end
+
+  # squad:memory:set — stores with key smem:{squad_id}:{key}
+  def handle_in("squad:memory:set", %{"payload" => payload}, socket) do
+    case require_squad(socket) do
+      {:error, reply} ->
+        {:reply, {:error, reply}, socket}
+
+      {:ok, squad_id} ->
+        key = Map.get(payload, "key")
+
+        cond do
+          is_nil(key) or key == "" ->
+            {:reply, {:error, %{
+              reason: "missing_key",
+              message: "Squad memory entries require a 'key' field."
+            }}, socket}
+
+          not quota_ok?(socket.assigns.tenant_id, :memory_entries) ->
+            {:reply, {:error, %{
+              reason: "quota_exceeded",
+              resource: "memory_entries",
+              message: "Memory entry quota reached."
+            }}, socket}
+
+          true ->
+            Hub.Quota.increment(socket.assigns.tenant_id, :memory_entries)
+            params = Map.put(payload, "author", socket.assigns.agent_id)
+
+            case Hub.SquadMemory.set(squad_id, key, params) do
+              {:ok, entry} ->
+                {:reply, {:ok, %{
+                  "type" => "squad",
+                  "event" => "memory:set",
+                  "payload" => %{id: entry["id"], key: entry["key"], squad_id: squad_id}
+                }}, socket}
+            end
+        end
+    end
+  end
+
+  def handle_in("squad:memory:set", payload, socket) when is_map(payload) do
+    handle_in("squad:memory:set", %{"payload" => payload}, socket)
+  end
+
+  # squad:memory:get — reads squad-scoped memory
+  def handle_in("squad:memory:get", %{"payload" => %{"key" => key}}, socket) do
+    case require_squad(socket) do
+      {:error, reply} ->
+        {:reply, {:error, reply}, socket}
+
+      {:ok, squad_id} ->
+        case Hub.SquadMemory.get(squad_id, key) do
+          {:ok, entry} ->
+            {:reply, {:ok, %{type: "squad", event: "memory:entry", payload: entry}}, socket}
+
+          :not_found ->
+            {:reply, {:error, %{reason: "not_found"}}, socket}
+        end
+    end
+  end
+
+  def handle_in("squad:memory:get", _payload, socket) do
+    {:reply, {:error, %{reason: "payload must include \"key\""}}, socket}
+  end
+
+  # squad:memory:list — lists squad memory keys
+  def handle_in("squad:memory:list", %{"payload" => payload}, socket) do
+    case require_squad(socket) do
+      {:error, reply} ->
+        {:reply, {:error, reply}, socket}
+
+      {:ok, squad_id} ->
+        opts =
+          []
+          |> maybe_opt(:limit, Map.get(payload, "limit"))
+          |> maybe_opt(:offset, Map.get(payload, "offset"))
+          |> maybe_opt(:tags, Map.get(payload, "tags"))
+          |> maybe_opt(:author, Map.get(payload, "author"))
+
+        {:ok, entries} = Hub.SquadMemory.list(squad_id, opts)
+
+        {:reply, {:ok, %{
+          type: "squad",
+          event: "memory:list",
+          payload: %{entries: entries, count: length(entries), squad_id: squad_id}
+        }}, socket}
+    end
+  end
+
+  def handle_in("squad:memory:list", _payload, socket) do
+    handle_in("squad:memory:list", %{"payload" => %{}}, socket)
+  end
+
+  # squad:memory:delete — deletes squad memory entry
+  def handle_in("squad:memory:delete", %{"payload" => %{"key" => key}}, socket) do
+    case require_squad(socket) do
+      {:error, reply} ->
+        {:reply, {:error, reply}, socket}
+
+      {:ok, squad_id} ->
+        case Hub.SquadMemory.delete(squad_id, key) do
+          :ok ->
+            {:reply, {:ok, %{deleted: true, squad_id: squad_id}}, socket}
+
+          :not_found ->
+            {:reply, {:error, %{reason: "not_found"}}, socket}
+        end
+    end
+  end
+
+  def handle_in("squad:memory:delete", _payload, socket) do
+    {:reply, {:error, %{reason: "payload must include \"key\""}}, socket}
+  end
+
+  # squad:activity:broadcast — broadcasts activity only to squad members
+  def handle_in("squad:activity:broadcast", %{"payload" => payload}, socket) do
+    case require_squad(socket) do
+      {:error, reply} ->
+        {:reply, {:error, reply}, socket}
+
+      {:ok, squad_id} ->
+        kind = Map.get(payload, "kind")
+
+        cond do
+          kind not in @valid_activity_kinds ->
+            {:reply, {:error, %{
+              reason: "invalid_activity_kind",
+              message: "Activity kind '#{kind}' is not valid. Must be one of: #{Enum.join(@valid_activity_kinds, ", ")}."
+            }}, socket}
+
+          not quota_ok?(socket.assigns.tenant_id, :messages_today) ->
+            {:reply, {:error, %{
+              reason: "quota_exceeded",
+              resource: "messages_today",
+              message: "Daily message quota reached."
+            }}, socket}
+
+          true ->
+            Hub.Quota.increment(socket.assigns.tenant_id, :messages_today)
+            event_id = "evt_" <> gen_uuid()
+
+            event = %{
+              "event_id" => event_id,
+              "from" => %{
+                "agent_id" => socket.assigns.agent_id,
+                "name" => get_agent_name(socket)
+              },
+              "kind" => kind,
+              "description" => Map.get(payload, "description", ""),
+              "tags" => Map.get(payload, "tags", []),
+              "data" => Map.get(payload, "data", %{}),
+              "squad_id" => squad_id,
+              "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+            }
+
+            broadcast_msg = %{
+              "type" => "squad",
+              "event" => "activity:broadcast",
+              "payload" => event
+            }
+
+            # Broadcast only to squad topic
+            Phoenix.PubSub.broadcast(Hub.PubSub, "squad:#{squad_id}", {:squad_activity, broadcast_msg})
+
+            # Persist to EventBus with squad_id in metadata for filtering
+            fleet_id = socket.assigns.fleet_id
+            bus_topic = "ringforge.#{fleet_id}.activity"
+
+            Task.start(fn ->
+              Hub.EventBus.publish(bus_topic, Map.put(event, "squad_id", squad_id))
+            end)
+
+            {:reply, {:ok, %{event_id: event_id, squad_id: squad_id}}, socket}
+        end
+    end
+  end
+
+  def handle_in("squad:activity:broadcast", payload, socket) when is_map(payload) do
+    handle_in("squad:activity:broadcast", %{"payload" => payload}, socket)
+  end
+
+  # squad:activity:history — returns activities filtered to squad
+  def handle_in("squad:activity:history", %{"payload" => payload}, socket) do
+    case require_squad(socket) do
+      {:error, reply} ->
+        {:reply, {:error, reply}, socket}
+
+      {:ok, squad_id} ->
+        fleet_id = socket.assigns.fleet_id
+        bus_topic = "ringforge.#{fleet_id}.activity"
+        limit = Map.get(payload, "limit", 50)
+
+        case Hub.EventBus.replay(bus_topic, limit: limit) do
+          {:ok, events} ->
+            # Filter to only events with matching squad_id
+            squad_events = Enum.filter(events, fn evt ->
+              Map.get(evt, "squad_id") == squad_id
+            end)
+
+            {:reply, {:ok, %{
+              "type" => "squad",
+              "event" => "activity:history",
+              "payload" => %{
+                "events" => squad_events,
+                "count" => length(squad_events),
+                "squad_id" => squad_id
+              }
+            }}, socket}
+
+          {:error, reason} ->
+            {:reply, {:error, %{reason: "replay failed: #{inspect(reason)}"}}, socket}
+        end
+    end
+  end
+
+  def handle_in("squad:activity:history", _payload, socket) do
+    handle_in("squad:activity:history", %{"payload" => %{}}, socket)
+  end
+
+  # squad:task:assign — leader assigns a task to a squad member
+  def handle_in("squad:task:assign", %{"payload" => payload}, socket) do
+    case require_squad_leader(socket) do
+      {:error, reply} ->
+        {:reply, {:error, reply}, socket}
+
+      {:ok, squad_id} ->
+        target_agent_id = Map.get(payload, "agent_id")
+        description = Map.get(payload, "description")
+
+        cond do
+          is_nil(target_agent_id) or target_agent_id == "" ->
+            {:reply, {:error, %{reason: "missing_agent_id", message: "Must specify target agent_id."}}, socket}
+
+          is_nil(description) or description == "" ->
+            {:reply, {:error, %{reason: "missing_description", message: "Must specify task description."}}, socket}
+
+          true ->
+            # Verify target agent is in the same squad
+            squad_agent_ids = get_squad_agent_ids(squad_id)
+
+            if target_agent_id not in squad_agent_ids do
+              {:reply, {:error, %{
+                reason: "not_in_squad",
+                message: "Agent #{target_agent_id} is not in this squad."
+              }}, socket}
+            else
+              task_id = "stask_" <> gen_uuid()
+
+              task_msg = %{
+                "type" => "squad",
+                "event" => "task:assigned",
+                "payload" => %{
+                  "task_id" => task_id,
+                  "assigned_by" => socket.assigns.agent_id,
+                  "assigned_to" => target_agent_id,
+                  "description" => description,
+                  "data" => Map.get(payload, "data", %{}),
+                  "squad_id" => squad_id,
+                  "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+                }
+              }
+
+              # Deliver to the target agent via their agent-specific PubSub topic
+              Phoenix.PubSub.broadcast(
+                Hub.PubSub,
+                "fleet:#{socket.assigns.fleet_id}:agent:#{target_agent_id}",
+                {:squad_task_assigned, task_msg}
+              )
+
+              # Also broadcast to squad topic so everyone sees the assignment
+              Phoenix.PubSub.broadcast(Hub.PubSub, "squad:#{squad_id}", {:squad_activity, %{
+                "type" => "squad",
+                "event" => "activity:broadcast",
+                "payload" => %{
+                  "event_id" => task_id,
+                  "from" => %{
+                    "agent_id" => socket.assigns.agent_id,
+                    "name" => get_agent_name(socket)
+                  },
+                  "kind" => "task_started",
+                  "description" => "Task assigned to #{target_agent_id}: #{description}",
+                  "squad_id" => squad_id,
+                  "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+                }
+              }})
+
+              {:reply, {:ok, %{
+                "type" => "squad",
+                "event" => "task:assigned",
+                "payload" => %{task_id: task_id, assigned_to: target_agent_id}
+              }}, socket}
+            end
+        end
+    end
+  end
+
+  def handle_in("squad:task:assign", payload, socket) when is_map(payload) do
+    handle_in("squad:task:assign", %{"payload" => payload}, socket)
+  end
+
+  # squad:kick — leader removes an agent from the squad
+  def handle_in("squad:kick", %{"payload" => payload}, socket) do
+    case require_squad_leader(socket) do
+      {:error, reply} ->
+        {:reply, {:error, reply}, socket}
+
+      {:ok, squad_id} ->
+        target_agent_id = Map.get(payload, "agent_id")
+
+        cond do
+          is_nil(target_agent_id) or target_agent_id == "" ->
+            {:reply, {:error, %{reason: "missing_agent_id", message: "Must specify agent_id to kick."}}, socket}
+
+          target_agent_id == socket.assigns.agent_id ->
+            {:reply, {:error, %{reason: "cannot_kick_self", message: "Cannot kick yourself from the squad."}}, socket}
+
+          true ->
+            case Hub.Fleets.remove_agent_from_squad(target_agent_id) do
+              {:ok, _agent} ->
+                # Broadcast to squad that agent was kicked
+                Phoenix.PubSub.broadcast(Hub.PubSub, "squad:#{squad_id}", {:squad_presence, %{
+                  "type" => "squad",
+                  "event" => "presence",
+                  "payload" => %{
+                    "agent_id" => target_agent_id,
+                    "action" => "kicked",
+                    "kicked_by" => socket.assigns.agent_id
+                  }
+                }})
+
+                {:reply, {:ok, %{
+                  "type" => "squad",
+                  "event" => "kicked",
+                  "payload" => %{
+                    "agent_id" => target_agent_id,
+                    "squad_id" => squad_id,
+                    "kicked_by" => socket.assigns.agent_id
+                  }
+                }}, socket}
+
+              {:error, reason} ->
+                {:reply, {:error, %{reason: to_string(reason)}}, socket}
+            end
+        end
+    end
+  end
+
+  def handle_in("squad:kick", payload, socket) when is_map(payload) do
+    handle_in("squad:kick", %{"payload" => payload}, socket)
+  end
+
   # ── Terminate — cleanup on disconnect ──────────────────────
 
   @impl true
@@ -1813,6 +3094,18 @@ defmodule Hub.FleetChannel do
         "agent_id" => agent_id
       }
     })
+
+    # Broadcast squad leave if agent was in a squad
+    if squad_id = socket.assigns[:squad_id] do
+      Phoenix.PubSub.broadcast(Hub.PubSub, "squad:#{squad_id}", {:squad_presence, %{
+        "type" => "squad",
+        "event" => "presence",
+        "payload" => %{
+          "agent_id" => agent_id,
+          "action" => "left"
+        }
+      }})
+    end
 
     # Update last_seen_at in DB and end session
     case Auth.find_agent(agent_id) do
@@ -1875,6 +3168,53 @@ defmodule Hub.FleetChannel do
   defp maybe_update(map, _key, "", _current), do: map
   defp maybe_update(map, key, new_val, current) when new_val != current, do: Map.put(map, key, new_val)
   defp maybe_update(map, _key, _new_val, _current), do: map
+
+  defp kanban_task_to_wire(%Hub.Schemas.KanbanTask{} = t) do
+    %{
+      "task_id" => t.task_id,
+      "title" => t.title,
+      "description" => t.description,
+      "lane" => t.lane,
+      "priority" => t.priority,
+      "effort" => t.effort,
+      "scope" => t.scope,
+      "requires_capabilities" => t.requires_capabilities,
+      "depends_on" => t.depends_on,
+      "blocked_by" => t.blocked_by,
+      "acceptance_criteria" => t.acceptance_criteria,
+      "context_refs" => t.context_refs,
+      "tags" => t.tags,
+      "progress" => t.progress,
+      "progress_pct" => t.progress_pct,
+      "result" => t.result,
+      "assigned_to" => t.assigned_to,
+      "created_by" => t.created_by,
+      "reviewed_by" => t.reviewed_by,
+      "fleet_id" => t.fleet_id,
+      "squad_id" => t.squad_id,
+      "deadline" => t.deadline && DateTime.to_iso8601(t.deadline),
+      "started_at" => t.started_at && DateTime.to_iso8601(t.started_at),
+      "completed_at" => t.completed_at && DateTime.to_iso8601(t.completed_at),
+      "position" => t.position,
+      "inserted_at" => t.inserted_at && NaiveDateTime.to_iso8601(t.inserted_at)
+    }
+  end
+
+  defp kanban_task_to_wire(other) when is_map(other), do: other
+
+  defp maybe_put_squad(attrs, socket) do
+    case socket.assigns[:squad_id] do
+      nil -> attrs
+      squad_id -> Map.put_new(attrs, "squad_id", squad_id)
+    end
+  end
+
+  defp get_group_id_for_squad(squad_id) do
+    case Hub.Repo.get(Hub.Groups.Group, squad_id) do
+      nil -> nil
+      group -> group.group_id
+    end
+  end
 
   defp fetch_agent(socket) do
     case Auth.find_agent(socket.assigns.agent_id) do
@@ -2057,6 +3397,60 @@ defmodule Hub.FleetChannel do
       true ->
         pattern == key
     end
+  end
+
+  # ── Squad Helpers ────────────────────────────────────────
+
+  # Require the agent to be in a squad. Returns {:ok, squad_id} or {:error, map}.
+  defp require_squad(socket) do
+    case socket.assigns[:squad_id] do
+      nil -> {:error, %{reason: "no_squad", message: "You are not assigned to a squad."}}
+      squad_id -> {:ok, squad_id}
+    end
+  end
+
+  # Require the agent to be a squad leader (admin or owner in GroupMember).
+  defp require_squad_leader(socket) do
+    case require_squad(socket) do
+      {:error, _} = err ->
+        err
+
+      {:ok, squad_id} ->
+        agent_id = socket.assigns.agent_id
+
+        # Look up group_id from squad_id (which is the binary FK to groups table)
+        # squad_id on Agent is the groups.id (binary_id), we need the group_id string
+        case Hub.Repo.get(Hub.Groups.Group, squad_id) do
+          nil ->
+            {:error, %{reason: "squad_not_found", message: "Squad not found."}}
+
+          group ->
+            case Hub.Groups.member_role(group.group_id, agent_id) do
+              {:ok, role} when role in ["admin", "owner"] ->
+                {:ok, squad_id}
+
+              {:ok, _} ->
+                {:error, %{reason: "not_leader", message: "Only squad leaders (admin/owner) can perform this action."}}
+
+              {:error, :not_member} ->
+                {:error, %{reason: "not_member", message: "You are not a member of this squad's group."}}
+
+              {:error, _} ->
+                {:error, %{reason: "squad_error", message: "Could not verify squad role."}}
+            end
+        end
+    end
+  end
+
+  # Get all agent_ids in a squad (by squad's DB id which is groups.id)
+  defp get_squad_agent_ids(squad_id) do
+    import Ecto.Query
+
+    Hub.Repo.all(
+      from a in Hub.Auth.Agent,
+        where: a.squad_id == ^squad_id,
+        select: a.agent_id
+    )
   end
 
   # ── Idempotency Helpers ──────────────────────────────────

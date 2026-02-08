@@ -72,6 +72,9 @@ defmodule Hub.Application do
         # Webhook event subscriber (bridges PubSub → WebhookDispatcher)
         {Hub.WebhookSubscriber, []},
 
+        # Message rate limiter (ETS-backed, per-agent rate tracking)
+        {Hub.Messaging.RateLimiter, []},
+
         # MQTT bridge (IoT/domotic — disabled by default)
         mqtt_bridge_child(),
 
@@ -79,12 +82,30 @@ defmodule Hub.Application do
         maybe_drainer_child(),
 
         # Phoenix endpoint (WebSocket transport)
-        Hub.Endpoint
+        Hub.Endpoint,
+
+        # Role seeder (seeds predefined roles after Repo is ready)
+        {Hub.RoleSeeder, []}
       ]
       |> Enum.reject(&is_nil/1)
 
     opts = [strategy: :one_for_one, name: Hub.Supervisor]
-    Supervisor.start_link(children, opts)
+    result = Supervisor.start_link(children, opts)
+
+    result
+  end
+
+  @doc false
+  def seed_roles do
+    require Logger
+
+    try do
+      Hub.Roles.seed_predefined_roles()
+      Logger.info("[Roles] Predefined role seeding completed")
+    rescue
+      e ->
+        Logger.error("[Roles] Seeding failed: #{Exception.message(e)}")
+    end
   end
 
   defp event_bus_child do

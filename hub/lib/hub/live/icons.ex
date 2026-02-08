@@ -698,4 +698,51 @@ defmodule Hub.Live.Icons do
     </svg>
     """
   end
+
+  attr :class, :string, default: "w-4 h-4"
+
+  def kanban(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M6 5v11"></path>
+      <path d="M12 5v6"></path>
+      <path d="M18 5v14"></path>
+    </svg>
+    """
+  end
+
+  attr :class, :string, default: "w-4 h-4"
+
+  def chevron_right(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m9 18 6-6-6-6"></path>
+    </svg>
+    """
+  end
+
+  attr :class, :string, default: "w-4 h-4"
+
+  def chevron_left(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m15 18-6-6 6-6"></path>
+    </svg>
+    """
+  end
+
+  attr :class, :string, default: "w-4 h-4"
+
+  def grip_vertical(assigns) do
+    ~H"""
+    <svg class={@class} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="9" cy="12" r="1"></circle>
+      <circle cx="9" cy="5" r="1"></circle>
+      <circle cx="9" cy="19" r="1"></circle>
+      <circle cx="15" cy="12" r="1"></circle>
+      <circle cx="15" cy="5" r="1"></circle>
+      <circle cx="15" cy="19" r="1"></circle>
+    </svg>
+    """
+  end
 end

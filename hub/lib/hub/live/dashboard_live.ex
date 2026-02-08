@@ -84,7 +84,28 @@ defmodule Hub.Live.DashboardLive do
           squad_form_name: "",
           squad_form_fleet_id: nil,
           assign_agent_fleet_open: false,
-          assign_agent_fleet_agent_id: nil
+          assign_agent_fleet_agent_id: nil,
+          # Kanban board
+          kanban_board: %{"backlog" => [], "ready" => [], "in_progress" => [], "review" => [], "done" => []},
+          kanban_stats: %{},
+          kanban_selected_task: nil,
+          kanban_detail_open: false,
+          kanban_create_open: false,
+          kanban_task_history: [],
+          kanban_filters: %{squad_id: nil, assigned_to: nil, priority: nil, search: ""},
+          kanban_form: %{
+            title: "",
+            description: "",
+            priority: "medium",
+            effort: "medium",
+            assigned_to: "",
+            squad_id: "",
+            acceptance_criteria: [],
+            new_criterion: ""
+          },
+          kanban_squads: [],
+          kanban_edit_mode: false,
+          kanban_progress_pct: 0
         )
 
         if connected?(socket) do
@@ -195,6 +216,12 @@ defmodule Hub.Live.DashboardLive do
     socket = if view == "messaging" && params["agent"] do
       messages = load_conversation(socket.assigns.fleet_id, params["agent"])
       assign(socket, msg_to: params["agent"], messages: messages)
+    else
+      socket
+    end
+
+    socket = if view == "kanban" do
+      load_kanban_board(socket)
     else
       socket
     end
@@ -550,6 +577,10 @@ defmodule Hub.Live.DashboardLive do
         )}
       socket.assigns.cmd_open ->
         {:noreply, assign(socket, cmd_open: false, cmd_query: "")}
+      socket.assigns[:kanban_detail_open] ->
+        {:noreply, assign(socket, kanban_detail_open: false, kanban_selected_task: nil, kanban_edit_mode: false)}
+      socket.assigns[:kanban_create_open] ->
+        {:noreply, assign(socket, kanban_create_open: false)}
       socket.assigns.agent_detail_open ->
         {:noreply, assign(socket, agent_detail_open: false)}
       true ->
@@ -788,6 +819,206 @@ defmodule Hub.Live.DashboardLive do
       )}
     else
       {:noreply, assign(socket, toast: {:error, "Key not found"})}
+    end
+  end
+
+  # ── Kanban Board Events ─────────────────────────────────────
+
+  def handle_event("kanban_refresh", _, socket) do
+    {:noreply, load_kanban_board(socket)}
+  end
+
+  def handle_event("kanban_open_create", _, socket) do
+    {:noreply, assign(socket,
+      kanban_create_open: true,
+      kanban_form: %{
+        title: "", description: "", priority: "medium", effort: "medium",
+        assigned_to: "", squad_id: "", acceptance_criteria: [], new_criterion: ""
+      }
+    )}
+  end
+
+  def handle_event("kanban_close_create", _, socket) do
+    {:noreply, assign(socket, kanban_create_open: false)}
+  end
+
+  def handle_event("kanban_form_field", %{"field" => field, "value" => value}, socket) do
+    form = Map.put(socket.assigns.kanban_form, String.to_existing_atom(field), value)
+    {:noreply, assign(socket, kanban_form: form)}
+  end
+
+  def handle_event("kanban_add_criterion", _, socket) do
+    form = socket.assigns.kanban_form
+    criterion = String.trim(form.new_criterion)
+    if criterion != "" do
+      form = %{form | acceptance_criteria: form.acceptance_criteria ++ [criterion], new_criterion: ""}
+      {:noreply, assign(socket, kanban_form: form)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("kanban_remove_criterion", %{"index" => idx}, socket) do
+    form = socket.assigns.kanban_form
+    idx = String.to_integer(idx)
+    criteria = List.delete_at(form.acceptance_criteria, idx)
+    {:noreply, assign(socket, kanban_form: %{form | acceptance_criteria: criteria})}
+  end
+
+  def handle_event("kanban_save_task", _, socket) do
+    form = socket.assigns.kanban_form
+    title = String.trim(form.title)
+
+    if title == "" do
+      Process.send_after(self(), :clear_toast, 4_000)
+      {:noreply, assign(socket, toast: {:error, "Task title is required"})}
+    else
+      attrs = %{
+        title: title,
+        description: form.description,
+        priority: form.priority,
+        effort: form.effort,
+        tenant_id: socket.assigns.tenant_id,
+        created_by: "dashboard",
+        acceptance_criteria: form.acceptance_criteria
+      }
+      attrs = if form.assigned_to != "", do: Map.put(attrs, :assigned_to, form.assigned_to), else: attrs
+      attrs = if form.squad_id != "", do: Map.put(attrs, :squad_id, form.squad_id), else: attrs
+
+      case Hub.Kanban.create_task(socket.assigns.fleet_id, attrs) do
+        {:ok, task} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          socket = assign(socket, kanban_create_open: false, toast: {:success, "Task #{task.task_id} created"})
+          {:noreply, load_kanban_board(socket)}
+
+        {:error, changeset} when is_struct(changeset) ->
+          error = Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
+                  |> Enum.map_join(". ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, error})}
+
+        {:error, reason} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          {:noreply, assign(socket, toast: {:error, "Failed: #{inspect(reason)}"})}
+      end
+    end
+  end
+
+  def handle_event("kanban_select_task", %{"task-id" => task_id}, socket) do
+    case Hub.Kanban.get_task(task_id) do
+      {:ok, task} ->
+        history = case Hub.Kanban.task_history(task_id) do
+          {:ok, h} -> h
+          _ -> []
+        end
+        {:noreply, assign(socket,
+          kanban_selected_task: task,
+          kanban_detail_open: true,
+          kanban_task_history: history,
+          kanban_edit_mode: false,
+          kanban_progress_pct: task.progress_pct || 0
+        )}
+      {:error, _} ->
+        {:noreply, assign(socket, toast: {:error, "Task not found"})}
+    end
+  end
+
+  def handle_event("kanban_close_detail", _, socket) do
+    {:noreply, assign(socket, kanban_detail_open: false, kanban_selected_task: nil, kanban_edit_mode: false)}
+  end
+
+  def handle_event("kanban_move_task", %{"task-id" => task_id, "lane" => lane}, socket) do
+    case Hub.Kanban.move_task(task_id, lane, "dashboard") do
+      {:ok, _task} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        socket = assign(socket, toast: {:success, "Task moved to #{String.replace(lane, "_", " ")}"})
+        # Reload task detail if still open
+        socket = if socket.assigns.kanban_selected_task && socket.assigns.kanban_selected_task.task_id == task_id do
+          case Hub.Kanban.get_task(task_id) do
+            {:ok, task} ->
+              history = case Hub.Kanban.task_history(task_id) do {:ok, h} -> h; _ -> [] end
+              assign(socket, kanban_selected_task: task, kanban_task_history: history)
+            _ -> socket
+          end
+        else
+          socket
+        end
+        {:noreply, load_kanban_board(socket)}
+
+      {:error, {:invalid_transition, from, to, valid}} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Cannot move from #{from} to #{to}. Valid: #{Enum.join(valid, ", ")}"})}
+
+      {:error, reason} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        {:noreply, assign(socket, toast: {:error, "Move failed: #{inspect(reason)}"})}
+    end
+  end
+
+  def handle_event("kanban_update_progress", %{"value" => value}, socket) do
+    pct = case Integer.parse(value) do
+      {n, _} -> max(0, min(100, n))
+      _ -> 0
+    end
+    {:noreply, assign(socket, kanban_progress_pct: pct)}
+  end
+
+  def handle_event("kanban_save_progress", _, socket) do
+    task = socket.assigns.kanban_selected_task
+    if task do
+      case Hub.Kanban.update_task(task.task_id, %{progress_pct: socket.assigns.kanban_progress_pct}) do
+        {:ok, updated} ->
+          Process.send_after(self(), :clear_toast, 4_000)
+          socket = assign(socket, kanban_selected_task: updated, toast: {:success, "Progress updated"})
+          {:noreply, load_kanban_board(socket)}
+        {:error, _} ->
+          {:noreply, assign(socket, toast: {:error, "Failed to update progress"})}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("kanban_claim_task", %{"task-id" => task_id}, socket) do
+    attrs = %{assigned_to: "dashboard"}
+    case Hub.Kanban.update_task(task_id, attrs) do
+      {:ok, task} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        socket = assign(socket, toast: {:success, "Claimed #{task.task_id}"})
+        socket = if socket.assigns.kanban_selected_task && socket.assigns.kanban_selected_task.task_id == task_id do
+          assign(socket, kanban_selected_task: task)
+        else
+          socket
+        end
+        {:noreply, load_kanban_board(socket)}
+      {:error, _} ->
+        {:noreply, assign(socket, toast: {:error, "Failed to claim task"})}
+    end
+  end
+
+  def handle_event("kanban_filter", %{"field" => field, "value" => value}, socket) do
+    value = if value == "", do: nil, else: value
+    filters = Map.put(socket.assigns.kanban_filters, String.to_existing_atom(field), value)
+    {:noreply, assign(socket, kanban_filters: filters) |> load_kanban_board()}
+  end
+
+  def handle_event("kanban_search", %{"value" => value}, socket) do
+    filters = Map.put(socket.assigns.kanban_filters, :search, value)
+    {:noreply, assign(socket, kanban_filters: filters) |> load_kanban_board()}
+  end
+
+  def handle_event("kanban_toggle_edit", _, socket) do
+    {:noreply, assign(socket, kanban_edit_mode: !socket.assigns.kanban_edit_mode)}
+  end
+
+  def handle_event("kanban_update_field", %{"field" => field, "value" => value, "task-id" => task_id}, socket) do
+    case Hub.Kanban.update_task(task_id, %{String.to_existing_atom(field) => value}) do
+      {:ok, updated} ->
+        Process.send_after(self(), :clear_toast, 4_000)
+        socket = assign(socket, kanban_selected_task: updated, toast: {:success, "Updated"})
+        {:noreply, load_kanban_board(socket)}
+      {:error, _} ->
+        {:noreply, assign(socket, toast: {:error, "Failed to update"})}
     end
   end
 
@@ -1307,6 +1538,7 @@ defmodule Hub.Live.DashboardLive do
             <Components.nav_item view="fleets" icon={:layers} label="Fleets" active={@current_view == "fleets"} badge={to_string(length(@tenant_fleets))} />
             <Components.nav_item view="agents" icon={:bot} label="Agents" active={@current_view == "agents"} badge={to_string(map_size(@agents))} />
             <Components.nav_item view="activity" icon={:activity} label="Activity" active={@current_view == "activity"} />
+            <Components.nav_item view="kanban" icon={:kanban} label="Kanban" active={@current_view == "kanban"} />
             <Components.nav_item view="messaging" icon={:message_square} label="Messaging" active={@current_view == "messaging"} />
             <Components.nav_item view="quotas" icon={:gauge} label="Quotas" active={@current_view == "quotas"} />
             <Components.nav_item view="metrics" icon={:activity} label="Metrics" active={false} />
@@ -1334,6 +1566,7 @@ defmodule Hub.Live.DashboardLive do
             <% "fleets" -> %> <%= render_fleets(assigns) %>
             <% "agents" -> %> <%= render_agents(assigns) %>
             <% "activity" -> %> <%= render_activity(assigns) %>
+            <% "kanban" -> %> <%= render_kanban(assigns) %>
             <% "messaging" -> %> <%= render_messaging(assigns) %>
             <% "quotas" -> %> <%= render_quotas(assigns) %>
             <% "settings" -> %> <%= render_settings(assigns) %>
@@ -2789,6 +3022,62 @@ defmodule Hub.Live.DashboardLive do
       {:ok, msgs} -> msgs
       {:error, _} -> []
     end
+  end
+
+  defp load_kanban_board(socket) do
+    fleet_id = socket.assigns.fleet_id
+    board = Hub.Kanban.fleet_board(fleet_id)
+    stats = Hub.Kanban.board_stats(fleet_id)
+    squads = try do Hub.Fleets.list_squads(fleet_id) rescue _ -> [] end
+
+    # Apply filters
+    filters = socket.assigns.kanban_filters
+    board = filter_kanban_board(board, filters)
+
+    assign(socket,
+      kanban_board: board,
+      kanban_stats: stats,
+      kanban_squads: squads
+    )
+  end
+
+  defp filter_kanban_board(board, filters) do
+    Enum.map(board, fn {lane, tasks} ->
+      filtered = tasks
+      |> then(fn tasks ->
+        case filters[:squad_id] do
+          nil -> tasks
+          sid -> Enum.filter(tasks, &(&1.squad_id == sid))
+        end
+      end)
+      |> then(fn tasks ->
+        case filters[:assigned_to] do
+          nil -> tasks
+          agent -> Enum.filter(tasks, &(&1.assigned_to == agent))
+        end
+      end)
+      |> then(fn tasks ->
+        case filters[:priority] do
+          nil -> tasks
+          pri -> Enum.filter(tasks, &(&1.priority == pri))
+        end
+      end)
+      |> then(fn tasks ->
+        case filters[:search] do
+          nil -> tasks
+          "" -> tasks
+          q ->
+            q = String.downcase(q)
+            Enum.filter(tasks, fn t ->
+              String.contains?(String.downcase(t.title || ""), q) ||
+              String.contains?(String.downcase(t.task_id || ""), q) ||
+              String.contains?(String.downcase(t.assigned_to || ""), q)
+            end)
+        end
+      end)
+      {lane, filtered}
+    end)
+    |> Map.new()
   end
 
   # ══════════════════════════════════════════════════════════
