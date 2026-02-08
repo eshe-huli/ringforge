@@ -2361,6 +2361,698 @@ defmodule Hub.Live.DashboardLive do
   end
 
   # ══════════════════════════════════════════════════════════
+  # Page: Kanban Board
+  # ══════════════════════════════════════════════════════════
+
+  defp render_kanban(assigns) do
+    lanes = [
+      {"backlog", "Backlog", "bg-zinc-800/50", "text-zinc-400", "border-zinc-700"},
+      {"ready", "Ready", "bg-green-500/10", "text-green-400", "border-green-500/20"},
+      {"in_progress", "In Progress", "bg-blue-500/10", "text-blue-400", "border-blue-500/20"},
+      {"review", "Review", "bg-yellow-500/10", "text-yellow-400", "border-yellow-500/20"},
+      {"done", "Done", "bg-emerald-500/10", "text-emerald-400", "border-emerald-500/20"}
+    ]
+
+    lane_counts = assigns.kanban_stats["lanes"] || %{}
+    velocity_24h = assigns.kanban_stats["velocity_24h"] || 0
+    avg_cycle = assigns.kanban_stats["avg_cycle_time_hours"]
+    total = assigns.kanban_stats["total"] || 0
+    blocked = assigns.kanban_stats["blocked"] || 0
+
+    # Unique agents across all tasks for filter dropdown
+    all_agents_in_board = assigns.kanban_board
+      |> Enum.flat_map(fn {_lane, tasks} -> tasks end)
+      |> Enum.map(& &1.assigned_to)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    assigns = assign(assigns,
+      lanes: lanes,
+      lane_counts: lane_counts,
+      velocity_24h: velocity_24h,
+      avg_cycle: avg_cycle,
+      kb_total: total,
+      kb_blocked: blocked,
+      all_agents_in_board: all_agents_in_board
+    )
+
+    ~H"""
+    <div class="h-full flex flex-col overflow-hidden animate-fade-in">
+      <%!-- Header --%>
+      <div class="px-6 py-4 border-b border-zinc-800 shrink-0">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <h2 class="text-lg font-semibold text-zinc-100 flex items-center gap-2">
+              <Icons.kanban class="w-5 h-5 text-amber-400" />
+              Kanban Board
+            </h2>
+            <p class="text-sm text-zinc-500">Task management and workflow</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <.button variant="outline" size="sm" phx-click="kanban_refresh"
+              class="h-8 text-xs border-zinc-700 text-zinc-400 hover:text-zinc-200">
+              <Icons.refresh_cw class="w-3.5 h-3.5 mr-1.5" /> Refresh
+            </.button>
+            <.button size="sm" phx-click="kanban_open_create"
+              class="h-8 text-xs bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold">
+              <Icons.plus class="w-3.5 h-3.5 mr-1.5" /> New Task
+            </.button>
+          </div>
+        </div>
+
+        <%!-- Stats bar --%>
+        <div class="flex items-center gap-3 text-xs flex-wrap">
+          <div class="flex items-center gap-1.5 text-zinc-400">
+            <span class="text-zinc-500">📊</span>
+            <span>Total: <span class="text-zinc-200 font-medium"><%= @kb_total %></span></span>
+          </div>
+          <span class="text-zinc-700">|</span>
+          <div class="flex items-center gap-1.5 text-zinc-400">
+            <span>📋</span>
+            <span>Backlog: <span class="text-zinc-200 font-medium"><%= @lane_counts["backlog"] || 0 %></span></span>
+          </div>
+          <span class="text-zinc-700">|</span>
+          <div class="flex items-center gap-1.5 text-zinc-400">
+            <span>🟢</span>
+            <span>Ready: <span class="text-green-400 font-medium"><%= @lane_counts["ready"] || 0 %></span></span>
+          </div>
+          <span class="text-zinc-700">|</span>
+          <div class="flex items-center gap-1.5 text-zinc-400">
+            <span>🔵</span>
+            <span>Active: <span class="text-blue-400 font-medium"><%= @lane_counts["in_progress"] || 0 %></span></span>
+          </div>
+          <span class="text-zinc-700">|</span>
+          <div class="flex items-center gap-1.5 text-zinc-400">
+            <span>🟡</span>
+            <span>Review: <span class="text-yellow-400 font-medium"><%= @lane_counts["review"] || 0 %></span></span>
+          </div>
+          <span class="text-zinc-700">|</span>
+          <div class="flex items-center gap-1.5 text-zinc-400">
+            <span>✅</span>
+            <span>Done: <span class="text-emerald-400 font-medium"><%= @lane_counts["done"] || 0 %></span></span>
+          </div>
+          <%= if @kb_blocked > 0 do %>
+            <span class="text-zinc-700">|</span>
+            <div class="flex items-center gap-1.5 text-red-400">
+              <span>🚫</span>
+              <span>Blocked: <span class="font-medium"><%= @kb_blocked %></span></span>
+            </div>
+          <% end %>
+          <span class="text-zinc-700">|</span>
+          <div class="flex items-center gap-1.5 text-zinc-400">
+            <span>⚡</span>
+            <span>Velocity: <span class="text-amber-400 font-medium"><%= @velocity_24h %>/day</span></span>
+          </div>
+          <%= if @avg_cycle do %>
+            <span class="text-zinc-700">|</span>
+            <div class="flex items-center gap-1.5 text-zinc-400">
+              <span>⏱️</span>
+              <span>Cycle: <span class="text-zinc-200 font-medium"><%= @avg_cycle %>h</span></span>
+            </div>
+          <% end %>
+        </div>
+
+        <%!-- Filters --%>
+        <div class="flex items-center gap-3 mt-3">
+          <div class="flex items-center gap-2 flex-1">
+            <div class="relative flex-1 max-w-xs">
+              <Icons.search class="w-3.5 h-3.5 text-zinc-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                phx-keyup="kanban_search"
+                value={@kanban_filters.search}
+                placeholder="Search tasks..."
+                class="w-full h-8 pl-8 pr-3 text-xs bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-200 placeholder:text-zinc-600 focus:border-amber-500/50 focus:outline-none focus:ring-1 focus:ring-amber-500/20"
+              />
+            </div>
+            <select
+              phx-change="kanban_filter"
+              name="value"
+              phx-value-field="priority"
+              class="h-8 px-2.5 text-xs bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-400 focus:border-amber-500/50 focus:outline-none"
+            >
+              <option value="" selected={is_nil(@kanban_filters.priority)}>All Priorities</option>
+              <option value="critical" selected={@kanban_filters.priority == "critical"}>🔴 Critical</option>
+              <option value="high" selected={@kanban_filters.priority == "high"}>🟠 High</option>
+              <option value="medium" selected={@kanban_filters.priority == "medium"}>🟡 Medium</option>
+              <option value="low" selected={@kanban_filters.priority == "low"}>⚪ Low</option>
+            </select>
+            <select
+              phx-change="kanban_filter"
+              name="value"
+              phx-value-field="assigned_to"
+              class="h-8 px-2.5 text-xs bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-400 focus:border-amber-500/50 focus:outline-none"
+            >
+              <option value="" selected={is_nil(@kanban_filters.assigned_to)}>All Agents</option>
+              <%= for agent_id <- @all_agents_in_board do %>
+                <option value={agent_id} selected={@kanban_filters.assigned_to == agent_id}><%= agent_id %></option>
+              <% end %>
+            </select>
+            <%= if @kanban_squads != [] do %>
+              <select
+                phx-change="kanban_filter"
+                name="value"
+                phx-value-field="squad_id"
+                class="h-8 px-2.5 text-xs bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-400 focus:border-amber-500/50 focus:outline-none"
+              >
+                <option value="" selected={is_nil(@kanban_filters.squad_id)}>All Squads</option>
+                <%= for squad <- @kanban_squads do %>
+                  <option value={squad.id} selected={@kanban_filters.squad_id == squad.id}><%= squad.name %></option>
+                <% end %>
+              </select>
+            <% end %>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Board --%>
+      <div class="flex-1 overflow-x-auto overflow-y-hidden p-4">
+        <div class="flex gap-3 h-full min-w-max">
+          <%= for {lane_key, lane_label, header_bg, header_text, header_border} <- @lanes do %>
+            <% tasks = Map.get(@kanban_board, lane_key, []) %>
+            <div class="w-64 flex flex-col bg-zinc-900/50 rounded-xl border border-zinc-800 overflow-hidden shrink-0">
+              <%!-- Lane header --%>
+              <div class={"px-3 py-2.5 border-b flex items-center justify-between " <> header_bg <> " " <> header_border}>
+                <div class="flex items-center gap-2">
+                  <span class={"text-xs font-semibold uppercase tracking-wider " <> header_text}>
+                    <%= lane_label %>
+                  </span>
+                  <span class="text-[10px] font-medium text-zinc-500 bg-zinc-800/80 rounded-full px-1.5 py-0.5">
+                    <%= length(tasks) %>
+                  </span>
+                </div>
+              </div>
+
+              <%!-- Task cards --%>
+              <div class="flex-1 overflow-y-auto p-2 space-y-2">
+                <%= if tasks == [] do %>
+                  <div class="text-center py-6">
+                    <p class="text-[11px] text-zinc-600 italic">No tasks</p>
+                  </div>
+                <% else %>
+                  <%= for task <- tasks do %>
+                    <div
+                      phx-click="kanban_select_task"
+                      phx-value-task-id={task.task_id}
+                      class="group p-2.5 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-700 cursor-pointer transition-all duration-150 hover:shadow-md hover:shadow-black/20"
+                    >
+                      <%!-- Top row: task_id + priority --%>
+                      <div class="flex items-center justify-between mb-1.5">
+                        <span class="text-[10px] font-mono text-zinc-500"><%= task.task_id %></span>
+                        <div class="flex items-center gap-1.5">
+                          <%= if task.effort do %>
+                            <span class={"text-[9px] font-medium px-1.5 py-0.5 rounded " <> effort_style(task.effort)}>
+                              <%= effort_short(task.effort) %>
+                            </span>
+                          <% end %>
+                          <span class="text-sm"><%= priority_emoji(task.priority) %></span>
+                        </div>
+                      </div>
+
+                      <%!-- Title --%>
+                      <p class="text-xs font-medium text-zinc-200 leading-snug mb-1.5 line-clamp-2">
+                        <%= task.title %>
+                      </p>
+
+                      <%!-- Progress bar (only in_progress) --%>
+                      <%= if lane_key == "in_progress" && task.progress_pct > 0 do %>
+                        <div class="mb-1.5">
+                          <div class="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
+                            <div class="h-full bg-blue-500 rounded-full transition-all" style={"width: #{task.progress_pct}%"}></div>
+                          </div>
+                          <span class="text-[9px] text-zinc-500"><%= task.progress_pct %>%</span>
+                        </div>
+                      <% end %>
+
+                      <%!-- Bottom: assigned agent --%>
+                      <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-1.5">
+                          <%= if task.assigned_to do %>
+                            <div class="w-4 h-4 rounded bg-zinc-700 flex items-center justify-center">
+                              <span class="text-[8px] font-bold text-zinc-400"><%= String.first(task.assigned_to) |> String.upcase() %></span>
+                            </div>
+                            <span class="text-[10px] text-zinc-500 truncate max-w-[100px]"><%= task.assigned_to %></span>
+                          <% else %>
+                            <span class="text-[10px] text-zinc-600 italic">Unassigned</span>
+                          <% end %>
+                        </div>
+                        <%= if (task.blocked_by || []) != [] do %>
+                          <span class="text-[10px] text-red-400" title="Blocked">🚫</span>
+                        <% end %>
+                      </div>
+                    </div>
+                  <% end %>
+                <% end %>
+              </div>
+            </div>
+          <% end %>
+        </div>
+      </div>
+
+      <%!-- Task Detail Modal --%>
+      <%= if @kanban_detail_open && @kanban_selected_task do %>
+        <div class="fixed inset-0 z-[60] flex items-start justify-end animate-fade-in">
+          <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" phx-click="kanban_close_detail"></div>
+          <div class="relative w-full max-w-lg h-full bg-zinc-900 border-l border-zinc-800 shadow-2xl overflow-y-auto">
+            <% task = @kanban_selected_task %>
+            <%!-- Header --%>
+            <div class="sticky top-0 z-10 px-5 py-4 border-b border-zinc-800 bg-zinc-900/95 backdrop-blur-sm">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-mono text-zinc-500"><%= task.task_id %></span>
+                  <span class="text-lg"><%= priority_emoji(task.priority) %></span>
+                  <.badge variant="outline" class={"text-[10px] " <> lane_badge_style(task.lane)}>
+                    <%= String.replace(task.lane, "_", " ") |> String.upcase() %>
+                  </.badge>
+                </div>
+                <div class="flex items-center gap-1">
+                  <.button variant="ghost" size="icon" phx-click="kanban_toggle_edit" class="h-7 w-7 text-zinc-500 hover:text-zinc-300">
+                    <Icons.pencil class="w-3.5 h-3.5" />
+                  </.button>
+                  <.button variant="ghost" size="icon" phx-click="kanban_close_detail" class="h-7 w-7 text-zinc-500 hover:text-zinc-300">
+                    <Icons.x class="w-4 h-4" />
+                  </.button>
+                </div>
+              </div>
+              <h3 class="text-base font-semibold text-zinc-100 mt-2"><%= task.title %></h3>
+            </div>
+
+            <div class="px-5 py-4 space-y-5">
+              <%!-- Move buttons --%>
+              <div>
+                <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 block">Move To</label>
+                <div class="flex flex-wrap gap-1.5">
+                  <%= for target_lane <- valid_transitions(task.lane) do %>
+                    <.button
+                      variant="outline"
+                      size="sm"
+                      phx-click="kanban_move_task"
+                      phx-value-task-id={task.task_id}
+                      phx-value-lane={target_lane}
+                      class={"h-7 text-[11px] " <> lane_move_btn_style(target_lane)}
+                    >
+                      <%= lane_emoji(target_lane) %> <%= String.replace(target_lane, "_", " ") |> String.capitalize() %>
+                    </.button>
+                  <% end %>
+                </div>
+              </div>
+
+              <%!-- Description --%>
+              <%= if task.description && task.description != "" do %>
+                <div>
+                  <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-1.5 block">Description</label>
+                  <p class="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap"><%= task.description %></p>
+                </div>
+              <% end %>
+
+              <%!-- Metadata grid --%>
+              <div class="grid grid-cols-2 gap-3">
+                <div class="bg-zinc-800/50 rounded-lg p-3">
+                  <div class="text-[10px] text-zinc-500 uppercase mb-1">Priority</div>
+                  <div class="text-sm text-zinc-200"><%= priority_emoji(task.priority) %> <%= String.capitalize(task.priority) %></div>
+                </div>
+                <div class="bg-zinc-800/50 rounded-lg p-3">
+                  <div class="text-[10px] text-zinc-500 uppercase mb-1">Effort</div>
+                  <div class="text-sm text-zinc-200"><%= String.capitalize(task.effort || "—") %></div>
+                </div>
+                <div class="bg-zinc-800/50 rounded-lg p-3">
+                  <div class="text-[10px] text-zinc-500 uppercase mb-1">Assigned To</div>
+                  <div class="text-sm text-zinc-200"><%= task.assigned_to || "Unassigned" %></div>
+                </div>
+                <div class="bg-zinc-800/50 rounded-lg p-3">
+                  <div class="text-[10px] text-zinc-500 uppercase mb-1">Created By</div>
+                  <div class="text-sm text-zinc-200"><%= task.created_by || "—" %></div>
+                </div>
+              </div>
+
+              <%!-- Claim button if unassigned --%>
+              <%= if is_nil(task.assigned_to) do %>
+                <.button variant="outline" size="sm" phx-click="kanban_claim_task" phx-value-task-id={task.task_id}
+                  class="w-full h-8 text-xs border-amber-500/30 text-amber-400 hover:bg-amber-500/10">
+                  Claim Task
+                </.button>
+              <% end %>
+
+              <%!-- Progress --%>
+              <%= if task.lane == "in_progress" do %>
+                <div>
+                  <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 block">Progress</label>
+                  <div class="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min="0" max="100" step="5"
+                      value={@kanban_progress_pct}
+                      phx-change="kanban_update_progress"
+                      name="value"
+                      class="flex-1 h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                    />
+                    <span class="text-xs text-zinc-400 font-mono w-10 text-right"><%= @kanban_progress_pct %>%</span>
+                    <.button variant="outline" size="sm" phx-click="kanban_save_progress"
+                      class="h-7 text-[10px] border-blue-500/30 text-blue-400 hover:bg-blue-500/10">
+                      Save
+                    </.button>
+                  </div>
+                  <div class="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden mt-2">
+                    <div class="h-full bg-blue-500 rounded-full transition-all" style={"width: #{@kanban_progress_pct}%"}></div>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Acceptance criteria --%>
+              <%= if (task.acceptance_criteria || []) != [] do %>
+                <div>
+                  <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 block">Acceptance Criteria</label>
+                  <div class="space-y-1">
+                    <%= for {criterion, _idx} <- Enum.with_index(task.acceptance_criteria) do %>
+                      <div class="flex items-start gap-2 py-1">
+                        <span class="text-zinc-600 text-xs mt-0.5">•</span>
+                        <span class="text-xs text-zinc-300"><%= criterion %></span>
+                      </div>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Tags --%>
+              <%= if (task.tags || []) != [] do %>
+                <div>
+                  <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 block">Tags</label>
+                  <div class="flex flex-wrap gap-1">
+                    <%= for tag <- task.tags do %>
+                      <.badge variant="outline" class="text-[10px] bg-zinc-800/50 text-zinc-400 border-zinc-700"><%= tag %></.badge>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Dependencies --%>
+              <%= if (task.depends_on || []) != [] do %>
+                <div>
+                  <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 block">Dependencies</label>
+                  <div class="flex flex-wrap gap-1">
+                    <%= for dep <- task.depends_on do %>
+                      <.badge variant="outline" class="text-[10px] bg-zinc-800/50 text-zinc-400 border-zinc-700 font-mono"><%= dep %></.badge>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Blocked By --%>
+              <%= if (task.blocked_by || []) != [] do %>
+                <div>
+                  <label class="text-[10px] text-red-500 uppercase tracking-wider font-medium mb-2 block">Blocked By</label>
+                  <div class="flex flex-wrap gap-1">
+                    <%= for blocker <- task.blocked_by do %>
+                      <.badge variant="outline" class="text-[10px] bg-red-500/10 text-red-400 border-red-500/20 font-mono"><%= blocker %></.badge>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Timestamps --%>
+              <div class="border-t border-zinc-800 pt-4">
+                <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 block">Timeline</label>
+                <div class="space-y-1.5 text-xs">
+                  <div class="flex justify-between">
+                    <span class="text-zinc-500">Created</span>
+                    <span class="text-zinc-400 font-mono"><%= format_timestamp(task.inserted_at) %></span>
+                  </div>
+                  <%= if task.started_at do %>
+                    <div class="flex justify-between">
+                      <span class="text-zinc-500">Started</span>
+                      <span class="text-zinc-400 font-mono"><%= format_timestamp(task.started_at) %></span>
+                    </div>
+                  <% end %>
+                  <%= if task.completed_at do %>
+                    <div class="flex justify-between">
+                      <span class="text-zinc-500">Completed</span>
+                      <span class="text-zinc-400 font-mono"><%= format_timestamp(task.completed_at) %></span>
+                    </div>
+                  <% end %>
+                </div>
+              </div>
+
+              <%!-- History --%>
+              <%= if @kanban_task_history != [] do %>
+                <div class="border-t border-zinc-800 pt-4">
+                  <label class="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2 block">History</label>
+                  <div class="space-y-2">
+                    <%= for entry <- Enum.reverse(@kanban_task_history) do %>
+                      <div class="flex items-start gap-2">
+                        <div class="w-1.5 h-1.5 rounded-full bg-zinc-600 mt-1.5 shrink-0"></div>
+                        <div class="min-w-0">
+                          <div class="text-xs text-zinc-300">
+                            <span class="font-medium"><%= entry.changed_by %></span>
+                            moved
+                            <%= if entry.from_lane do %>
+                              <span class="text-zinc-500"><%= entry.from_lane %></span> →
+                            <% end %>
+                            <span class="font-medium"><%= entry.to_lane %></span>
+                          </div>
+                          <%= if entry.reason do %>
+                            <div class="text-[10px] text-zinc-500 italic"><%= entry.reason %></div>
+                          <% end %>
+                          <div class="text-[10px] text-zinc-600 font-mono"><%= format_timestamp(entry.inserted_at) %></div>
+                        </div>
+                      </div>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Task ID reference --%>
+              <div class="text-[10px] text-zinc-600 font-mono pt-2 border-t border-zinc-800">
+                ID: <%= task.id %>
+              </div>
+            </div>
+          </div>
+        </div>
+      <% end %>
+
+      <%!-- Create Task Modal --%>
+      <%= if @kanban_create_open do %>
+        <div class="fixed inset-0 z-[60] flex items-center justify-center animate-fade-in">
+          <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" phx-click="kanban_close_create"></div>
+          <div class="relative w-full max-w-lg mx-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl max-h-[85vh] overflow-y-auto">
+            <div class="sticky top-0 z-10 px-6 py-4 border-b border-zinc-800 bg-zinc-900">
+              <div class="flex items-center justify-between">
+                <h3 class="text-sm font-semibold text-zinc-100">Create Task</h3>
+                <.button variant="ghost" size="icon" phx-click="kanban_close_create" class="h-7 w-7 text-zinc-500 hover:text-zinc-300">
+                  <Icons.x class="w-4 h-4" />
+                </.button>
+              </div>
+            </div>
+
+            <div class="px-6 py-5 space-y-4">
+              <%!-- Title --%>
+              <div>
+                <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Title <span class="text-red-400">*</span></label>
+                <input
+                  type="text"
+                  phx-keyup="kanban_form_field"
+                  phx-value-field="title"
+                  value={@kanban_form.title}
+                  placeholder="Task title..."
+                  autofocus
+                  class="w-full h-9 px-3 text-sm bg-zinc-950 border border-zinc-700 rounded-lg text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50 focus:outline-none focus:ring-1 focus:ring-amber-500/20"
+                />
+              </div>
+
+              <%!-- Description --%>
+              <div>
+                <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Description</label>
+                <textarea
+                  phx-keyup="kanban_form_field"
+                  phx-value-field="description"
+                  rows="3"
+                  placeholder="Describe the task..."
+                  class="w-full px-3 py-2 text-sm bg-zinc-950 border border-zinc-700 rounded-lg text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50 focus:outline-none focus:ring-1 focus:ring-amber-500/20 resize-none"
+                ><%= @kanban_form.description %></textarea>
+              </div>
+
+              <%!-- Priority + Effort row --%>
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Priority</label>
+                  <select
+                    phx-change="kanban_form_field"
+                    phx-value-field="priority"
+                    name="value"
+                    class="w-full h-9 px-3 text-sm bg-zinc-950 border border-zinc-700 rounded-lg text-zinc-100 focus:border-amber-500/50 focus:outline-none"
+                  >
+                    <option value="critical" selected={@kanban_form.priority == "critical"}>🔴 Critical</option>
+                    <option value="high" selected={@kanban_form.priority == "high"}>🟠 High</option>
+                    <option value="medium" selected={@kanban_form.priority == "medium"}>🟡 Medium</option>
+                    <option value="low" selected={@kanban_form.priority == "low"}>⚪ Low</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Effort</label>
+                  <select
+                    phx-change="kanban_form_field"
+                    phx-value-field="effort"
+                    name="value"
+                    class="w-full h-9 px-3 text-sm bg-zinc-950 border border-zinc-700 rounded-lg text-zinc-100 focus:border-amber-500/50 focus:outline-none"
+                  >
+                    <option value="trivial" selected={@kanban_form.effort == "trivial"}>Trivial</option>
+                    <option value="small" selected={@kanban_form.effort == "small"}>Small</option>
+                    <option value="medium" selected={@kanban_form.effort == "medium"}>Medium</option>
+                    <option value="large" selected={@kanban_form.effort == "large"}>Large</option>
+                    <option value="epic" selected={@kanban_form.effort == "epic"}>Epic</option>
+                  </select>
+                </div>
+              </div>
+
+              <%!-- Assigned to --%>
+              <div>
+                <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Assign To</label>
+                <select
+                  phx-change="kanban_form_field"
+                  phx-value-field="assigned_to"
+                  name="value"
+                  class="w-full h-9 px-3 text-sm bg-zinc-950 border border-zinc-700 rounded-lg text-zinc-100 focus:border-amber-500/50 focus:outline-none"
+                >
+                  <option value="">Unassigned</option>
+                  <%= for {agent_id, meta} <- Enum.sort_by(@agents, fn {_, m} -> m[:name] || "" end) do %>
+                    <option value={agent_id} selected={@kanban_form.assigned_to == agent_id}>
+                      <%= meta[:name] || agent_id %>
+                    </option>
+                  <% end %>
+                </select>
+              </div>
+
+              <%!-- Squad scope --%>
+              <%= if @kanban_squads != [] do %>
+                <div>
+                  <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Squad</label>
+                  <select
+                    phx-change="kanban_form_field"
+                    phx-value-field="squad_id"
+                    name="value"
+                    class="w-full h-9 px-3 text-sm bg-zinc-950 border border-zinc-700 rounded-lg text-zinc-100 focus:border-amber-500/50 focus:outline-none"
+                  >
+                    <option value="">Fleet-wide</option>
+                    <%= for squad <- @kanban_squads do %>
+                      <option value={squad.id} selected={@kanban_form.squad_id == squad.id}><%= squad.name %></option>
+                    <% end %>
+                  </select>
+                </div>
+              <% end %>
+
+              <%!-- Acceptance criteria --%>
+              <div>
+                <label class="text-xs text-zinc-400 mb-1.5 block font-medium">Acceptance Criteria</label>
+                <div class="space-y-1.5 mb-2">
+                  <%= for {criterion, idx} <- Enum.with_index(@kanban_form.acceptance_criteria) do %>
+                    <div class="flex items-center gap-2 group">
+                      <span class="text-zinc-600 text-xs">•</span>
+                      <span class="text-xs text-zinc-300 flex-1"><%= criterion %></span>
+                      <button phx-click="kanban_remove_criterion" phx-value-index={idx}
+                        class="text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Icons.x class="w-3 h-3" />
+                      </button>
+                    </div>
+                  <% end %>
+                </div>
+                <div class="flex gap-2">
+                  <input
+                    type="text"
+                    phx-keyup="kanban_form_field"
+                    phx-value-field="new_criterion"
+                    phx-key="Enter"
+                    value={@kanban_form.new_criterion}
+                    placeholder="Add criterion..."
+                    class="flex-1 h-8 px-3 text-xs bg-zinc-950 border border-zinc-700 rounded-lg text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50 focus:outline-none"
+                  />
+                  <.button variant="outline" size="sm" phx-click="kanban_add_criterion"
+                    class="h-8 text-xs border-zinc-700 text-zinc-400 hover:text-zinc-200">
+                    <Icons.plus class="w-3 h-3" />
+                  </.button>
+                </div>
+              </div>
+
+              <%!-- Actions --%>
+              <div class="flex items-center justify-end gap-2 pt-3 border-t border-zinc-800">
+                <.button variant="outline" phx-click="kanban_close_create" class="border-zinc-700 text-zinc-400 hover:text-zinc-200 text-xs">
+                  Cancel
+                </.button>
+                <.button phx-click="kanban_save_task" class="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-xs">
+                  Create Task
+                </.button>
+              </div>
+            </div>
+          </div>
+        </div>
+      <% end %>
+    </div>
+    """
+  end
+
+  # ── Kanban helpers ──
+
+  defp priority_emoji("critical"), do: "🔴"
+  defp priority_emoji("high"), do: "🟠"
+  defp priority_emoji("medium"), do: "🟡"
+  defp priority_emoji("low"), do: "⚪"
+  defp priority_emoji(_), do: "⬜"
+
+  defp lane_emoji("backlog"), do: "📋"
+  defp lane_emoji("ready"), do: "🟢"
+  defp lane_emoji("in_progress"), do: "🔵"
+  defp lane_emoji("review"), do: "🟡"
+  defp lane_emoji("done"), do: "✅"
+  defp lane_emoji("cancelled"), do: "🚫"
+  defp lane_emoji(_), do: "⬜"
+
+  defp effort_short("trivial"), do: "XS"
+  defp effort_short("small"), do: "S"
+  defp effort_short("medium"), do: "M"
+  defp effort_short("large"), do: "L"
+  defp effort_short("epic"), do: "XL"
+  defp effort_short(_), do: "?"
+
+  defp effort_style("trivial"), do: "bg-zinc-800 text-zinc-500"
+  defp effort_style("small"), do: "bg-green-500/10 text-green-400"
+  defp effort_style("medium"), do: "bg-yellow-500/10 text-yellow-400"
+  defp effort_style("large"), do: "bg-orange-500/10 text-orange-400"
+  defp effort_style("epic"), do: "bg-red-500/10 text-red-400"
+  defp effort_style(_), do: "bg-zinc-800 text-zinc-500"
+
+  defp lane_badge_style("backlog"), do: "bg-zinc-800/50 text-zinc-400 border-zinc-700"
+  defp lane_badge_style("ready"), do: "bg-green-500/10 text-green-400 border-green-500/20"
+  defp lane_badge_style("in_progress"), do: "bg-blue-500/10 text-blue-400 border-blue-500/20"
+  defp lane_badge_style("review"), do: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20"
+  defp lane_badge_style("done"), do: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+  defp lane_badge_style("cancelled"), do: "bg-red-500/10 text-red-400 border-red-500/20"
+  defp lane_badge_style(_), do: "bg-zinc-800 text-zinc-400 border-zinc-700"
+
+  defp lane_move_btn_style("ready"), do: "border-green-500/30 text-green-400 hover:bg-green-500/10"
+  defp lane_move_btn_style("in_progress"), do: "border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+  defp lane_move_btn_style("review"), do: "border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10"
+  defp lane_move_btn_style("done"), do: "border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+  defp lane_move_btn_style("backlog"), do: "border-zinc-600 text-zinc-400 hover:bg-zinc-800"
+  defp lane_move_btn_style("cancelled"), do: "border-red-500/30 text-red-400 hover:bg-red-500/10"
+  defp lane_move_btn_style(_), do: "border-zinc-700 text-zinc-400"
+
+  defp valid_transitions("backlog"), do: ~w(ready cancelled)
+  defp valid_transitions("ready"), do: ~w(in_progress cancelled)
+  defp valid_transitions("in_progress"), do: ~w(review ready cancelled)
+  defp valid_transitions("review"), do: ~w(done in_progress cancelled)
+  defp valid_transitions("done"), do: ~w(cancelled)
+  defp valid_transitions("cancelled"), do: ~w(backlog)
+  defp valid_transitions(_), do: []
+
+  defp format_timestamp(nil), do: "—"
+  defp format_timestamp(%NaiveDateTime{} = dt) do
+    Calendar.strftime(dt, "%Y-%m-%d %H:%M")
+  end
+  defp format_timestamp(%DateTime{} = dt) do
+    Calendar.strftime(dt, "%Y-%m-%d %H:%M")
+  end
+  defp format_timestamp(_), do: "—"
+
+  # ══════════════════════════════════════════════════════════
   # Page: Messaging
   # ══════════════════════════════════════════════════════════
 
